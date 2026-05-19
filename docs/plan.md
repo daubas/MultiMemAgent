@@ -31,8 +31,8 @@ Build an agent runtime that can help multiple users maintain an LLM Wiki with Gi
 參照 Mem0 的記憶操作模型（ADD / UPDATE / DELETE / NOOP），以相同分類邏輯驅動 read / summarize / propose / edit 四階段：
 - **Read**：載入用戶 Markdown 記憶檔與相關 Wiki 頁面
 - **Summarize**：萃取本輪對話中值得持久化的資訊，分類為 ADD / UPDATE / DELETE / NOOP
-- **Propose**：若屬共享知識，生成 Markdown diff 並開 PR；若屬用戶私人記憶，直接寫入 `{user_id}.md`
-- **Edit**：PR 合併後 repo 即為新的真實來源；私人記憶則在 `sync_turn()` 後立即生效
+- **Propose**：若屬共享知識，llm-wiki 直接寫入本地 wiki 工作樹（不立即開 PR）；若屬用戶私人記憶，寫入 `{user_id}.md`
+- **Edit**：每天凌晨 3 點 cron 將當日累積的 wiki 變更 commit 並開 PR；PR 合併後 repo 即為新的真實來源；私人記憶在 `sync_turn()` 後立即生效
 
 ### Hermes Tool / Skill Wiring
 `llm-wiki` skill 與 MCP 連接方式**由 Hermes 原生設定處理**，不另立 ADR。

@@ -28,9 +28,9 @@ All shared wiki content — regardless of which user or agent initiated the chan
 
 - The LLM reads the current wiki state before proposing any change.
 - The LLM synthesizes new content with existing content, absorbing what would otherwise be overlapping edits.
-- By the time a PR is opened, the content is already LLM-resolved; there is no raw Git conflict to arbitrate.
+- By the time the 3am cron commits and opens a PR, the content is already LLM-resolved; there is no raw Git conflict to arbitrate.
 
-Git worktree isolation (Hermes native) remains in use to keep agent edits on separate branches, but its purpose is **auditability and rollback**, not conflict prevention. Conflicts at the Git layer are not expected because llm-wiki controls the write path end-to-end.
+All agents write to the **same local wiki working tree** (single `wiki.path`). There are no separate per-agent branches during the day. The system runs as a **single Hermes process** — conversations are handled sequentially, so llm-wiki writes to the same page are never truly concurrent. No per-page locking or queue is required. The 3am cron opens one PR per changed page from that single working tree. Git worktree isolation is not used for daily writes; it remains available for rollback and investigation purposes only.
 
 ### Practical Rule
 

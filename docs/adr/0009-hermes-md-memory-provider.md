@@ -16,7 +16,7 @@ This design intentionally treats memory as a small Markdown artifact rather than
 | Vector database | Not used |
 | Retrieval | LLM reads the whole memory file directly |
 | Memory size | Roughly <= 200 lines is acceptable |
-| Integration | Hermes Memory Provider plugin |
+| Integration | Self-built plugin (bot middleware wrapping Hermes); designed to be open-sourced and reusable independently of this project |
 
 ## File Layout
 
@@ -54,7 +54,9 @@ _last_updated: 2026-05-19_
 
 ## Plugin Lifecycle
 
-The plugin should behave like a small stateful adapter around the markdown files.
+Hermes does not expose a pluggable memory provider interface. The lifecycle hooks below are **our own plugin design**, implemented at the bot middleware layer (sitting between the channel bot and Hermes). This plugin is self-contained and intended to be open-sourced independently of this project — any bot using Hermes (or other LLM runtimes) can adopt it.
+
+The plugin is a small stateful adapter around the Markdown files:
 
 1. `initialize()`
    - Ensure `users_dir` exists.
