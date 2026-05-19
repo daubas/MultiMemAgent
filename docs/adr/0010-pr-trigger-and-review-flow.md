@@ -8,7 +8,7 @@ status: accepted
 
 ADR-0008 established that all shared wiki changes flow through PRs. ADR-0011 established that `llm-wiki` is the sole write path for shared content and handles all content synthesis before any Git operation occurs.
 
-Hermes has a native GitHub skill covering the full PR lifecycle (create branch, commit, open PR, monitor CI). `llm-wiki` is configured through Hermes' native skill configuration — it is not a custom-coded wrapper.
+Hermes has a native GitHub skill covering the full PR lifecycle (create branch, commit, open PR, monitor CI). `llm-wiki` (`research/llm-wiki`) is a **built-in bundled skill** in Hermes, implementing Andrej Karpathy's LLM Wiki pattern. It builds persistent, interconnected Markdown knowledge bases with source ingestion, knowledge querying, and consistency linting. No custom skill code is required.
 
 ## Decision
 
@@ -23,12 +23,22 @@ This means:
 
 ### Tooling
 
-All Git and GitHub operations use **Hermes' native GitHub skill**, which is invoked through natural language commands (e.g. `/github-pr-workflow`), not a structured parameter API. `llm-wiki` is configured through Hermes native skill settings — no custom code is needed.
+**`llm-wiki` skill** handles all content decisions: trigger classification, page routing, cross-referencing, and consistency linting. It is invoked via `/llm-wiki` or triggered automatically when Hermes detects a knowledge-work workflow (≥5 tool calls) or when the conversation references wiki/knowledge topics.
 
-**Full-file replacement only.** The Hermes GitHub skill does not support patch or diff-based writes. The write flow is:
-1. Read the current wiki page in full.
+Configuration:
+```yaml
+# config.yaml
+skills.config.wiki.path: <local clone of this GitHub repo>
+```
+
+The wiki path must point to the **local clone of this repository** so the 3am cron job commits directly from the llm-wiki working directory.
+
+**GitHub skill** handles all Git and PR operations via natural language commands (e.g. `/github-pr-workflow`), not a structured parameter API.
+
+**Full-file replacement only.** The GitHub skill does not support patch or diff-based writes. The write flow is:
+1. `llm-wiki` reads the current wiki page in full.
 2. LLM synthesizes the complete updated version.
-3. Commit the full file back to the branch.
+3. GitHub skill commits the full file to the branch.
 
 Branch naming convention: `wiki/<page-slug>/<YYYYMMDD>`
 
@@ -58,4 +68,4 @@ Rejection flows back into the next batch cycle:
 - The 3am batch window eliminates race conditions at the Git layer.
 - Human review remains the change-control boundary.
 - Rejection handling is async and non-blocking — no user session is held waiting for review.
-- `llm-wiki` skill spec (trigger commands, input/output schema) is a separate implementation task, not an ADR concern.
+- `llm-wiki` is a Hermes built-in bundled skill; no custom implementation is required beyond setting `skills.config.wiki.path`.
