@@ -24,8 +24,16 @@ There is no locking, queuing, or merge strategy needed for cross-user scenarios 
 
 ### llm-wiki is the Sole Write Path for Shared Content
 
-All shared wiki content — regardless of which user or agent initiated the change — flows through the `llm-wiki` skill. This means:
+All shared wiki content flows through the `llm-wiki` skill, which has built-in content routing logic:
 
+| Condition | Destination |
+|---|---|
+| 2+ sources, or central to one source, AND result is substantial synthesis / deep analysis | Write to wiki |
+| Trivial lookup, or ephemeral response derivable from existing pages | Stay in session memory |
+
+The decision criterion is **re-derivation cost**: if it would be painful to reconstruct later, archive it. This judgment is LLM-driven and automatic — no explicit user command is needed.
+
+This means:
 - The LLM reads the current wiki state before proposing any change.
 - The LLM synthesizes new content with existing content, absorbing what would otherwise be overlapping edits.
 - By the time the 3am cron commits and opens a PR, the content is already LLM-resolved; there is no raw Git conflict to arbitrate.

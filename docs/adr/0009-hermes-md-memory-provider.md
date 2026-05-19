@@ -94,6 +94,8 @@ This mirrors Mem0-style update behavior, but the stored representation remains a
 
 All writes to `{user_id}.md` go through a single per-user async queue. A background worker per user processes items in order. No direct file writes outside the queue are permitted.
 
+The system runs as a single process, so conversations are handled sequentially by Hermes. The per-user queue is not needed to prevent cross-conversation concurrency — it exists to serialise the **in-process async tasks** (`sync_turn`, `on_session_end`, compression) that may interleave within a single conversation's async event loop. The `identity.lock` file lock is a defensive measure for future multi-process scaling and does not affect single-process operation.
+
 ```python
 queues: dict[str, asyncio.Queue] = {}
 

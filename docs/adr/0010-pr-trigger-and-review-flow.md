@@ -8,7 +8,11 @@ status: accepted
 
 ADR-0008 established that all shared wiki changes flow through PRs. ADR-0011 established that `llm-wiki` is the sole write path for shared content and handles all content synthesis before any Git operation occurs.
 
-Hermes has a native GitHub skill covering the full PR lifecycle (create branch, commit, open PR, monitor CI). `llm-wiki` (`research/llm-wiki`) is a **built-in bundled skill** in Hermes, implementing Andrej Karpathy's LLM Wiki pattern. It builds persistent, interconnected Markdown knowledge bases with source ingestion, knowledge querying, and consistency linting. No custom skill code is required.
+Hermes has a native GitHub skill covering the full PR lifecycle (create branch, commit, open PR, monitor CI). `llm-wiki` (`research/llm-wiki`) is a **built-in bundled skill** in Hermes, implementing Andrej Karpathy's LLM Wiki pattern. It ships with Hermes and is auto-deployed to `~/.hermes/skills/` on install.
+
+**Verification:** `hermes skills list | grep llm-wiki` confirms the skill is present before first use.
+
+**llm-wiki is not git-aware.** It manages a local Markdown directory only. All git operations (commit, push, branch, PR) are handled exclusively by the GitHub skill.
 
 ## Decision
 
@@ -31,13 +35,14 @@ This means:
 
 **`llm-wiki` skill** handles all content decisions: trigger classification, page routing, cross-referencing, and consistency linting. It is invoked via `/llm-wiki` or triggered automatically when Hermes detects a knowledge-work workflow (≥5 tool calls) or when the conversation references wiki/knowledge topics.
 
-Configuration:
-```yaml
-# config.yaml
-skills.config.wiki.path: <local clone of this GitHub repo>
-```
+**Setup (one-time):**
+1. Clone the wiki GitHub repo locally.
+2. `hermes config set skills.config.wiki.path <path to clone>`
+3. Ensure git credentials (PAT or SSH key) are configured for that repo — llm-wiki is not involved in authentication.
 
-The wiki path must point to the **local clone of this repository** so the 3am cron job commits directly from the llm-wiki working directory.
+llm-wiki initialises the directory with `SCHEMA.md`, `index.md`, `log.md` on first use if they do not exist.
+
+**3am cron diff base:** `git diff origin/main` — captures all uncommitted changes llm-wiki wrote during the day.
 
 **GitHub skill** handles all Git and PR operations via natural language commands (e.g. `/github-pr-workflow`), not a structured parameter API.
 
