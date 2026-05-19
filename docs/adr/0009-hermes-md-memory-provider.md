@@ -138,6 +138,33 @@ The canonical name defaults to the channel ID of the initiating side, or a user-
 
 Pairing requires action from both sides to prevent impersonation.
 
+### Pairing State and Atomic Update
+
+Pairing state is split into two layers to isolate in-flight requests from the authoritative registry:
+
+```
+_pairing/
+  {code}.json    ← short-lived confirmation request, includes expiry + Channel A user_id
+identity.json    ← only updated after both sides confirm
+```
+
+**Flow:**
+1. Channel A requests pairing → generate confirmation code → write `_pairing/{code}.json`
+2. Channel B submits code → verify code exists and not expired
+3. Atomic update of `identity.json`:
+   - Acquire `identity.lock`
+   - Read current `identity.json`
+   - Merge both user IDs under canonical name
+   - Write to `identity.json.tmp`
+   - Rename `identity.json.tmp` → `identity.json` (atomic on same filesystem)
+   - Release `identity.lock`
+4. Delete `_pairing/{code}.json`
+
+**Failure recovery:**
+- Failure before step 3 → `_pairing/{code}.json` still exists; Channel B can retry until expiry.
+- Failure during step 3 (after write, before rename) → `identity.json` untouched; orphaned `.tmp` is cleaned up on next startup.
+- Code expires before Channel B confirms → request file deleted; no effect on `identity.json`.
+
 ## Bot-Side Invocation
 
 The host application should bind the current user before each reply cycle.
