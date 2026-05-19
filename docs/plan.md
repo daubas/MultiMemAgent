@@ -2,15 +2,15 @@
 
 ## Goal
 
-Build an agent runtime that can help multiple users maintain an LLM Wiki with GitHub as the source of truth and Mem0 as the scoped memory sidecar.
+Build an agent runtime that can help multiple users maintain an LLM Wiki with GitHub as the source of truth and a Markdown Memory Provider as the per-user memory layer.
 
 ## Current Direction
 
 - GitHub repo stores the wiki content as Markdown.
 - Hermes runs the agent workflow and wiki-maintenance skills.
-- Mem0 handles user-scoped and agent-scoped memory isolation.
+- Markdown Memory Provider (Mem0-inspired, no Mem0 runtime dependency) handles per-user memory isolation.
 - PRs and reviews are the change-control boundary.
-- Obsidian stays a first-class human viewer/editor.
+- Obsidian is read-only: for inspecting wiki pages and private memory files only. All writes go through llm-wiki.
 
 ## What We Are Not Building First
 

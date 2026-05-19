@@ -2,9 +2,9 @@
 status: accepted
 ---
 
-# GitHub-backed LLM Wiki with Hermes as Runtime and Mem0 as Memory Sidecar
+# GitHub-backed LLM Wiki with Hermes as Runtime and Markdown Memory Provider
 
-We want a multi-user LLM Wiki workflow that keeps the wiki itself version-controlled in GitHub, uses Hermes as the agent runtime, and adds Mem0 only for per-user / per-agent memory isolation.
+We want a multi-user LLM Wiki workflow that keeps the wiki itself version-controlled in GitHub, uses Hermes as the agent runtime, and uses a Markdown Memory Provider (Mem0-inspired) for per-user memory isolation.
 
 The deletion test for a separate knowledge service is favorable here: if the canonical wiki already lives in Markdown files under Git, then version history, diff review, branch-based conflict resolution, PR approval, and rollback already exist. A dedicated knowledge service would mostly duplicate the repository's strengths unless we need real-time shared mutation or task-claim coordination. For our use case, we do not.
 
@@ -14,7 +14,7 @@ The deletion test for a separate knowledge service is favorable here: if the can
   - Markdown pages live in the repo.
   - Changes flow through branches and pull requests.
   - Review happens in PRs, not in a separate knowledge backend.
-  - Obsidian can open the same folder directly for human inspection.
+  - Obsidian can open the same folder for read-only inspection. It is not a write endpoint.
 
 - **Hermes is the primary agent runtime.**
   - Hermes handles the long-lived agent process, profiles, skills, and MCP/tool access.
@@ -51,11 +51,11 @@ The deletion test for a separate knowledge service is favorable here: if the can
 
 - **Agent behavior becomes easier to reason about.**
   - Hermes owns generation, editing, and maintenance workflows.
-  - Mem0 keeps user-specific memory out of the shared wiki corpus.
+  - Markdown Memory Provider keeps user-specific memory out of the shared wiki corpus.
 
 - **The wiki stays human-readable.**
   - Markdown remains the primary format.
-  - Obsidian stays a first-class viewer/editor.
+  - Obsidian is a read-only inspection tool; all edits go through llm-wiki.
 
 - **We avoid a second authoritative knowledge store.**
   - No separate knowledge database is needed for the wiki itself.
@@ -69,14 +69,14 @@ The deletion test for a separate knowledge service is favorable here: if the can
 4. Shared wiki content is written as Markdown changes in the GitHub repo.
 5. The change is reviewed through PRs.
 6. After merge, the repo is the source of truth.
-7. Mem0 stores only the scoped memory that should not become shared wiki content.
+7. Markdown Memory Provider stores only the user-scoped memory that should not become shared wiki content.
 
 ## Practical Rule
 
 If the information should be:
 
 - **shared and reviewable** -> commit it to the GitHub wiki
-- **personalized or user-scoped** -> keep it in Mem0
+- **personalized or user-scoped** -> keep it in Markdown Memory Provider
 - **agent behavior / editing workflow** -> let Hermes handle it
 
 ## References
