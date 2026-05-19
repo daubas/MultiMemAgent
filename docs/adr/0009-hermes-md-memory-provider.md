@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # Hermes Markdown Memory Provider for Multi-User Isolation
@@ -124,11 +124,11 @@ Do not store full raw conversations in the memory provider path unless we explic
 - We avoid running and maintaining a separate vector database.
 - The model decides whether new information belongs in the shared wiki or in private memory.
 
-## Open Questions
+## Decisions
 
-1. Which model should `sync_turn()` use for extraction? The current candidates are a cheap fast model such as Haiku or Gemini Flash.
-2. What exact truncation / compression strategy should apply once the file exceeds the soft line limit?
-3. Should we maintain `{user_id}_log.md` as an append-only rolling summary file, or keep only the current snapshot?
+1. **`sync_turn()` 使用 Gemini Flash** 做記憶萃取。理由：速度快、成本低，足以處理每輪對話後的增量更新。
+2. **截斷策略：壓縮回 200 行以內。** 當主記憶檔超過 ~200 行時，由 LLM 識別並刪除最不相關、最少被引用的條目，將全文壓縮至 200 行以內後覆寫。不保留被刪除條目的原文。
+3. **`{user_id}_log.md` 採滾動摘要（rolling summary）。** 每次壓縮主檔前，將被刪除或被合併的段落以摘要形式 append 進 log 檔，作為可查閱的歷史紀錄，但 log 檔本身不作為 LLM context 的常規輸入。
 
 ## Practical Rule
 
