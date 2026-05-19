@@ -4,56 +4,58 @@ status: accepted
 
 # PR Trigger and Review Flow
 
-We need to define when and how Hermes creates GitHub PRs for shared wiki content, who reviews them, and what happens when a PR is rejected.
-
 ## Context
 
-ADR-0008 established that all shared wiki changes must flow through PRs. Hermes has a built-in GitHub skill that covers the full PR lifecycle (create branch, commit, open PR, monitor CI status). The `llm-wiki` skill does not exist in the Hermes catalog and must be authored as a custom skill wrapping the GitHub skill.
+ADR-0008 established that all shared wiki changes flow through PRs. ADR-0011 established that `llm-wiki` is the sole write path for shared content and handles all content synthesis before any Git operation occurs.
+
+Hermes has a native GitHub skill covering the full PR lifecycle (create branch, commit, open PR, monitor CI). `llm-wiki` is configured through Hermes' native skill configuration — it is not a custom-coded wrapper.
 
 ## Decision
 
-### Trigger Condition
+### Trigger: Daily 3am Batch
 
-Hermes opens a PR only when content is classified as **shared & reviewable** per the practical rule in ADR-0008. The trigger is explicit, not automatic per-turn:
+Shared wiki changes are not pushed per conversation turn. All llm-wiki write candidates accumulated during the day are batched and pushed to GitHub at **03:00 daily** via Hermes' built-in scheduler.
 
-- User or agent explicitly requests a wiki update, **or**
-- Hermes accumulates enough shared-knowledge candidates across a session to justify a batch commit.
-
-Single-turn memory updates that belong in `{user_id}.md` (private memory) do **not** trigger a PR.
+This means:
+- No PR spam from individual conversations.
+- llm-wiki resolves all content synthesis before the batch runs.
+- By the time a commit is created, all conflicts are already absorbed at the LLM layer.
 
 ### Tooling
 
-All Git and GitHub operations are performed through **Hermes' native GitHub skill**. No custom Git tooling is built. The custom `llm-wiki` skill wraps this GitHub skill to add:
+All Git and GitHub operations use **Hermes' native GitHub skill**, which is invoked through natural language commands (e.g. `/github-pr-workflow`), not a structured parameter API. `llm-wiki` is configured through Hermes native skill settings — no custom code is needed.
 
-1. Wiki-specific branch naming: `wiki/<topic>/<date>`
-2. Markdown diff construction from agent-proposed content
-3. PR description template including source turn context
+**Full-file replacement only.** The Hermes GitHub skill does not support patch or diff-based writes. The write flow is:
+1. Read the current wiki page in full.
+2. LLM synthesizes the complete updated version.
+3. Commit the full file back to the branch.
+
+Branch naming convention: `wiki/<page-slug>/<YYYYMMDD>`
+
+### Infrastructure Requirement
+
+`hermes cron` requires **`hermes gateway` to be running continuously**. The 3am batch job will not fire if the gateway process is down. This is a hard deployment prerequisite — the gateway must be managed as a persistent service (e.g. systemd, launchd, or equivalent).
 
 ### Review Policy
 
-| Scenario | Reviewer |
+| Scenario | Action |
 |---|---|
 | Standard wiki update | Human review required before merge |
-| Automated fix (typo, dead link) | Human review still required; no auto-merge |
-| PR rejected with comments | Hermes re-reads comments, revises, and force-pushes the branch |
-| PR closed without merge | Content is discarded; agent records a NOOP for that candidate |
+| PR rejected with comments | Hermes reads comments, revises content, queues for next 3am batch |
+| PR closed without merge | Content discarded; NOOP recorded |
+| CI failure | Hermes alerts the originating user session; PR held until resolved |
 
-Human review is the default. No auto-approve path is defined at this stage.
+### PR Rejection Handling
 
-### CI Monitoring
-
-Hermes monitors CI status after opening a PR. If CI fails, Hermes alerts the relevant user session and holds further PRs on the same page until the failure is resolved.
-
-### Rejection Handling
-
-1. Reviewer leaves comments on PR.
-2. Hermes reads comments via GitHub skill.
-3. Hermes revises the Markdown and updates the branch.
-4. If revision is not possible (contradictory feedback, out-of-scope), Hermes closes the PR and logs the decision in `{user_id}_log.md`.
+Rejection flows back into the next batch cycle:
+1. Human reviewer leaves comments on PR.
+2. At next 3am run, Hermes reads open PR comments via GitHub skill.
+3. Hermes revises the candidate and includes it in the new batch commit.
+4. If a PR has been revised and rejected more than **3 times**, it is closed and the candidate is discarded.
 
 ## Consequences
 
-- PR spam is avoided because the trigger is explicit, not per-turn.
-- Human review remains the change-control boundary as defined in ADR-0008.
-- `llm-wiki` skill is a thin wrapper; most complexity lives in Hermes GitHub skill.
-- Rejection handling creates a feedback loop that improves future proposals.
+- The 3am batch window eliminates race conditions at the Git layer.
+- Human review remains the change-control boundary.
+- Rejection handling is async and non-blocking — no user session is held waiting for review.
+- `llm-wiki` skill spec (trigger commands, input/output schema) is a separate implementation task, not an ADR concern.

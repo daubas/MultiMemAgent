@@ -21,10 +21,10 @@ The deletion test for a separate knowledge service is favorable here: if the can
   - The `llm-wiki` skill is the agent-facing path for creating and maintaining the wiki.
   - Hermes is the editor / curator, not the canonical storage layer.
 
-- **Mem0 is an optional memory sidecar for multi-user isolation.**
-  - Use it for user-scoped or agent-scoped memory, session continuity, and personalization.
-  - Do not use it as the authoritative wiki store.
-  - It complements the wiki workflow by keeping private or per-user memory separate from shared content.
+- **Mem0 is an architectural reference only. It is not used as a runtime dependency.**
+  - The actual private memory store is the Hermes Markdown Memory Provider (see ADR-0009).
+  - Mem0's entity-scoping model (user_id / agent_id / run_id) and ADD/UPDATE/DELETE/NOOP operation classification are used as design references.
+  - Do not introduce Mem0 as a library or service dependency.
 
 ## Considered Options
 
@@ -39,8 +39,9 @@ The deletion test for a separate knowledge service is favorable here: if the can
 - **GitHub repo only, no agent runtime.** Rejected.
   - We still want Hermes to curate content, manage profiles, and operate the wiki through MCP/tools.
 
-- **GitHub repo + Hermes + Mem0.** Accepted.
+- **GitHub repo + Hermes + Markdown Memory Provider (Mem0-inspired).** Accepted.
   - This keeps the wiki canonical and reviewable while giving agents a runtime and isolated memory.
+  - Mem0 is referenced for its design patterns but not used as a runtime component.
 
 ## Consequences
 

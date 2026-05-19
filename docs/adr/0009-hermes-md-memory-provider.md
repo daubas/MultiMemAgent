@@ -88,12 +88,62 @@ The LLM should classify each candidate change into one of four operations:
 
 This mirrors Mem0-style update behavior, but the stored representation remains a simple Markdown document.
 
+## Concurrency: Per-User Async Write Queue
+
+All writes to `{user_id}.md` go through a single per-user async queue. A background worker per user processes items in order. No direct file writes outside the queue are permitted.
+
+```python
+queues: dict[str, asyncio.Queue] = {}
+
+async def sync_turn(user_id, delta):
+    await queues[user_id].put(("write", delta))
+
+async def on_session_end(user_id):
+    await queues[user_id].put(("flush", None))
+
+async def shutdown(user_id):
+    await queues[user_id].put(("stop", None))
+```
+
+This serializes sync_turn(), on_session_end(), compression, and shutdown() for the same user, eliminating all four identified race conditions (see discussion log).
+
+## Identity Schema and Cross-Channel Pairing
+
+User identity follows Mem0's entity scoping model: `user_id` is a plain string with no internal whitespace. The canonical format is `{channel}_{platform_id}` (e.g. `telegram_123456`, `discord_alice`).
+
+### Default: Channel-Isolated
+
+Each channel creates an independent memory file. A new user arriving from any channel gets their own `{channel}_{id}.md` immediately.
+
+### Pairing: User-Confirmed Unification
+
+When a user wants to merge their identities across channels, they initiate a **pair** flow:
+
+1. User sends a pair request from Channel A → system generates a short-lived confirmation code.
+2. User enters the code from Channel B → identities are linked.
+3. Both channel IDs are recorded in `identity.json` under a canonical name.
+4. The two memory files are merged by LLM into a single canonical `{canonical_name}.md`.
+5. The channel-specific files become aliases that resolve to the canonical file.
+
+```json
+// identity.json
+{
+  "paul": ["telegram_123456", "discord_alice"]
+}
+```
+
+After pairing, `set_user()` resolves any alias to the canonical name before any read or write.
+
+The canonical name defaults to the channel ID of the initiating side, or a user-supplied name.
+
+Pairing requires action from both sides to prevent impersonation.
+
 ## Bot-Side Invocation
 
 The host application should bind the current user before each reply cycle.
 
 ```python
-memory_provider.set_user("telegram", user_id)
+memory_provider.set_user("telegram", user_id)  # resolves alias if paired
 reply = await agent.chat(message)
 ```
 
