@@ -68,8 +68,37 @@ The plugin is a small stateful adapter around the Markdown files:
 
 3. `sync_turn()`
    - Run asynchronously after the turn.
-   - Extract memory changes and update the Markdown file.
+   - Acts as the **single classification authority** — decides what goes to private memory and what goes to the shared wiki.
    - Keep the write path non-blocking for the chat response.
+
+### sync_turn() Classification Flow
+
+`sync_turn()` uses Gemini Flash to classify the full conversation turn and route each piece of information:
+
+```
+Turn ends
+│
+└─ sync_turn() — Gemini Flash reads full turn
+      │
+      ├─ private_updates  →  ADD/UPDATE/DELETE/NOOP  →  enqueue write to {user_id}.md
+      │
+      └─ wiki_candidates  →  trigger /llm-wiki with candidate content
+```
+
+Gemini Flash prompt output structure:
+
+```json
+{
+  "private": [{"op": "ADD|UPDATE|DELETE|NOOP", "content": "..."}],
+  "wiki":    [{"content": "...", "reason": "re-derivation cost"}]
+}
+```
+
+Wiki criteria: 2+ sources, OR central to one source AND substantial synthesis that would be painful to re-derive. Everything else is private or NOOP.
+
+This resolves two issues:
+- **A2**: `sync_turn()` runs every turn regardless of tool call count — no shared knowledge is lost due to the ≥5 tool calls heuristic.
+- **B8**: classification and routing are one atomic step — the same content cannot appear in both private memory and the wiki.
 
 4. `on_session_end()`
    - Flush any pending updates.
@@ -81,7 +110,7 @@ The plugin is a small stateful adapter around the Markdown files:
 
 ## Memory Update Policy
 
-The LLM should classify each candidate change into one of four operations:
+The ADD/UPDATE/DELETE/NOOP classification applies to **private memory only** (`{user_id}.md`). Shared wiki content is routed to llm-wiki which has its own internal synthesis logic.
 
 - `ADD`: add a new fact or preference
 - `UPDATE`: replace an older statement with a newer one
