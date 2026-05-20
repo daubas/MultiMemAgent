@@ -8,7 +8,7 @@ status: accepted
 
 The earlier framing of "multi-user conflict" was incorrect. Conflicts do not arise in this system because:
 
-**Obsidian is read-only in this architecture.** It is used to inspect private memory files (`{user_id}.md`) and wiki pages, but it cannot write shared wiki content directly. All writes go through `llm-wiki`. If a human wants to edit wiki content, they do so via Obsidian as a draft surface and then explicitly trigger `llm-wiki` to formalize the change — the edit does not bypass the write path.
+**Obsidian is read-only in this architecture.** It is used to inspect private memory files (`{user_id}.md`) and wiki pages only. It is not a write endpoint. All wiki writes go through `llm-wiki`.
 
 
 1. Each user's memory content is isolated by `{user_id}.md` — one user's writes never touch another's file.

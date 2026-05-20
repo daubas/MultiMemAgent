@@ -55,7 +55,7 @@ llm-wiki initialises the directory with `SCHEMA.md`, `index.md`, `log.md` on fir
 2. LLM synthesizes the complete updated version.
 3. GitHub skill commits the full file to the branch.
 
-Branch naming convention: `wiki/<page-slug>/<YYYYMMDD>`
+Branch naming convention: `wiki/batch/<YYYYMMDD>` — one branch and one PR per day covering all pages changed in that batch. Per-page granularity is handled manually if needed.
 
 ### Infrastructure Requirement
 

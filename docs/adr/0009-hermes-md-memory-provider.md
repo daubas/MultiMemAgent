@@ -238,11 +238,11 @@ identity.json    ← only updated after both sides confirm
 The host application should bind the current user before each reply cycle.
 
 ```python
-memory_provider.set_user("telegram", user_id)  # resolves alias if paired
-reply = await agent.chat(message)
+canonical_id = pairing.resolve(f"telegram_{user_id}")  # returns canonical_name if paired, raw id if not
+reply = await agent.chat(message, user_id=canonical_id)
 ```
 
-The important rule is that user-scoped memory is selected before the agent generates a response.
+The important rule is that user-scoped memory is selected before the agent generates a response. `PairingManager.resolve()` is the sole alias-resolution interface — there is no separate `set_user()` method.
 
 ## Truncation Policy
 

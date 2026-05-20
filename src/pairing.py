@@ -11,7 +11,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
-import random
+import secrets
 import string
 from datetime import datetime, timezone
 from pathlib import Path
@@ -234,7 +234,7 @@ class PairingManager:
     def _generate_code(self) -> str:
         """Return a random 6-char uppercase alphanumeric code, guaranteed unique."""
         for _ in range(100):
-            code = "".join(random.choices(_CODE_CHARS, k=_CODE_LEN))
+            code = "".join(secrets.choice(_CODE_CHARS) for _ in range(_CODE_LEN))
             if not self._pairing_path(code).exists():
                 return code
         raise RuntimeError("Could not generate a unique pairing code after 100 tries")
