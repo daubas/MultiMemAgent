@@ -44,7 +44,7 @@ MMD handles option 1. Option 2 is the natural exit path if the use case outgrows
 
 **Per-user private memory.**
 
-Each user has their own `{user_id}.md`. Before each reply, MMD loads it into Hermes context. After the session, MMD updates it using one Gemini Flash call to classify what changed.
+Each user has their own `{user_id}.md`. Before each reply, MMD loads it into Hermes context. After the session, MMD updates it using one `ctx.llm.acomplete_structured()` call to classify what changed — reusing whatever model the user has configured in Hermes.
 
 ### Roadmap
 

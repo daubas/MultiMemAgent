@@ -69,7 +69,12 @@ Each compaction appends a timestamped summary block of what was removed.
 ## MemoryProvider Methods
 
 ### `initialize(session_id, **kwargs)`
-Ensure `users/` directory exists. Resolve `user_id` from `session_id`.
+Ensure `users/` directory exists. `user_id` is passed explicitly by the host bot via `kwargs` — it is never inferred from `session_id`. This follows mem0's pattern: identity is always the caller's responsibility.
+
+```python
+# Bot side — before each conversation
+await memory_provider.initialize(session_id, user_id=f"telegram_{message.from_user.id}")
+```
 
 ### `get_tool_schemas()` / `handle_tool_call()`
 Expose a `load_deep_memory` tool so the LLM can fetch `{user_id}_log.md` on demand.
