@@ -2,25 +2,22 @@
 status: accepted
 ---
 
-# MultiMemD (MMD) — Plugin Spec
+# MMD v1 Spec — Per-User Memory
 
-MultiMemD (MMD) is a self-built open-source middleware plugin between the channel bot and Hermes. It manages per-user private memory and buffers wiki candidates for the 3am llm-wiki batch.
+## What MMD Does (v1)
+
+1. Before each reply: load `{user_id}.md` into Hermes context
+2. After the session: one Gemini Flash call classifies what changed → update `{user_id}.md`
+
+That's it.
 
 ## Storage Layout
 
 ```
 $MMD_DATA_DIR/
-├── users/
-│   ├── telegram_123456.md
-│   ├── telegram_123456_log.md
-│   └── discord_alice.md
-├── _wiki_queue/
-│   ├── 20260520.jsonl
-│   └── 20260520.jsonl.done
-├── _pairing/
-│   └── {code}.json
-├── identity.json
-└── identity.lock
+└── users/
+    ├── telegram_123456.md
+    └── discord_alice.md
 ```
 
 ## Memory File Format
@@ -42,114 +39,46 @@ _last_updated: 2026-05-20_
 - [2026-05-20] 修正：...
 ```
 
-Target size: ≤ 200 lines. When exceeded, LLM compresses by removing least-referenced entries; deleted content is summarised into `{user_id}_log.md`.
+Target size: ≤ 200 lines. When exceeded, LLM compresses by removing least-referenced entries; a summary of what was removed is appended to `{user_id}_log.md`.
 
 ## Lifecycle Hooks
 
 ### `initialize()`
-- Ensure `users/` and `_wiki_queue/` directories exist.
-- Remove orphaned `.tmp` files left by crashed atomic writes.
+Ensure `users/` directory exists.
 
 ### `prefetch(user_id)`
-- Read `{user_id}.md`.
-- Inject content into Hermes system prompt as the user's memory context.
+Read `{user_id}.md` and inject into Hermes system prompt.
 
 ### `sync_turn(user_id, turn)`
-- Append raw turn to in-memory buffer. **Zero LLM cost.**
+Append raw turn to in-memory buffer. Zero LLM cost.
 
-### `_extract_and_persist(user_id)` — triggered by whichever comes first:
-- **(A) Context pressure**: accumulated buffer reaches 50% of session context limit (default: 2000 tokens).
-- **(B) Session end**: `on_session_end()` fires this unconditionally.
+### `_extract_and_persist(user_id)`
+Triggered by whichever comes first:
+- **(A)** Buffer reaches 50% of session context limit (default: 2000 tokens)
+- **(B)** Session ends
 
-Makes **one Gemini Flash call** to classify the entire buffer:
+Makes **one Gemini Flash call** to classify the buffer:
 
 ```json
 {
-  "private": [{"op": "ADD|UPDATE|DELETE|NOOP", "content": "..."}],
-  "wiki":    [{"content": "...", "reason": "re-derivation cost"}]
+  "private": [{"op": "ADD|UPDATE|DELETE|NOOP", "content": "..."}]
 }
 ```
 
-- `private` results → apply ADD/UPDATE/DELETE/NOOP to `{user_id}.md`
-- `wiki` results → append to `_wiki_queue/<YYYYMMDD>.jsonl`
-
-Wiki criteria: 2+ sources, or substantial synthesis painful to re-derive.
-
-Result: short sessions → 1 call at end. Long sessions → 1 call at pressure threshold + 1 at end.
+Applies the ops to `{user_id}.md`. Writes are atomic (tmp file + rename).
 
 ### `on_session_end(user_id)`
-- Trigger `_extract_and_persist()` if buffer is non-empty.
+Trigger `_extract_and_persist()` if buffer is non-empty.
 
 ### `shutdown()`
-- Wait for all background queue workers to finish before exit.
+Wait for any pending writes to finish.
 
-## `_wiki_queue` JSONL Schema
+## User ID Convention
 
-Each line is one JSON object:
+Format: `{channel}_{platform_id}` (e.g. `telegram_123456`, `discord_alice`).
 
-```json
-{
-  "v": 1,
-  "ts": "2026-05-20T15:30:00Z",
-  "user_id": "telegram_123456",
-  "content": "...",
-  "reason": "2+ sources / substantial synthesis",
-  "hint_page": "optional/page-slug"
-}
-```
-
-| Field | Required | Description |
-|---|---|---|
-| `v` | yes | Schema version. Consumer skips and warns on `v != 1`. |
-| `ts` | yes | ISO-8601 UTC write time. |
-| `user_id` | yes | Source user, for audit only. |
-| `content` | yes | Wiki candidate text. |
-| `reason` | yes | Why it was classified as wiki-worthy. |
-| `hint_page` | no | Suggested target page slug; llm-wiki may ignore. |
-
-**3am consumer rules:**
-- Read `<today>.jsonl` only.
-- Skip entries where `v != 1`.
-- Feed all entries to llm-wiki as a batch.
-- Rename file to `<YYYYMMDD>.jsonl.done` after processing to prevent re-runs.
-
-## Concurrency: Per-User Async Write Queue
-
-All writes to `{user_id}.md` go through a per-user `asyncio.Queue`. This serialises `sync_turn`, `_extract_and_persist`, `on_session_end`, and `shutdown` for the same user within a single async event loop.
+Passed directly by the bot — no alias resolution in v1.
 
 ```python
-queues: dict[str, asyncio.Queue] = {}
+reply = await agent.chat(message, user_id=f"telegram_{user_id}")
 ```
-
-The system runs as a single process; conversations are sequential. The queue prevents interleaving of async tasks within one conversation, not cross-conversation concurrency.
-
-## Identity and Pairing
-
-User IDs follow the format `{channel}_{platform_id}` (e.g. `telegram_123456`, `discord_alice`).
-
-**Before each reply cycle**, the bot resolves the incoming ID to its canonical form:
-
-```python
-canonical_id = pairing.resolve(f"telegram_{user_id}")
-reply = await agent.chat(message, user_id=canonical_id)
-```
-
-`PairingManager.resolve()` is the sole alias-resolution interface. If unpaired, the raw ID is returned unchanged.
-
-**Canonical name priority:** the initiator's existing canonical group wins; the confirmer's group is absorbed. If both are new, `initiator_id` becomes the canonical name.
-
-**Pairing flow:**
-1. User A sends `/pair` → system generates a 6-char code (10-min TTL, 3-attempt cap).
-2. User B submits the code → `identity.json` is atomically updated (`fcntl.flock` + tmp rename).
-3. Caller receives `(canonical_name, merged_ids, memory_files_to_merge)` and is responsible for LLM-merging the listed memory files into `{canonical_name}.md`.
-
-See `src/pairing.py` for the implementation.
-
-## Truncation Policy
-
-When `{user_id}.md` exceeds ~200 lines:
-1. LLM identifies and removes least-referenced entries.
-2. Removed content is summarised and appended to `{user_id}_log.md`.
-3. Main file is overwritten at ≤200 lines.
-
-`{user_id}_log.md` is not loaded into Hermes context — it exists for human inspection only.
