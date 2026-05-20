@@ -4,11 +4,31 @@ status: accepted
 
 # MMD v1 Spec — Per-User Memory
 
-## What MMD Does (v1)
+## Plugin Type
 
-1. Before each reply: load `{user_id}.md` into Hermes context
-2. After the session: one LLM call classifies what changed → update `{user_id}.md`
-3. When memory file exceeds ~200 lines: compact it, archive removed content to `{user_id}_log.md`
+MMD is a **Hermes Memory Provider plugin**, implementing the `MemoryProvider` abstract base class. Hermes handles the lifecycle integration automatically; MMD only needs to implement the required methods.
+
+## Plugin Structure
+
+```
+~/.hermes/plugins/mmd/
+├── plugin.yaml       ← manifest
+├── __init__.py       ← register(ctx)
+└── tools.py          ← handler implementations
+```
+
+## LLM Access
+
+MMD calls the user's configured Hermes model directly — no separate API key or provider needed:
+
+```python
+result = await ctx.llm.acomplete_structured(
+    messages=[...],
+    schema=CLASSIFICATION_SCHEMA   # ADD/UPDATE/DELETE/NOOP JSON schema
+)
+```
+
+All calls are automatically audit-logged by Hermes with plugin ID and token usage.
 
 ## Storage Layout
 
@@ -16,7 +36,7 @@ status: accepted
 $MMD_DATA_DIR/
 └── users/
     ├── telegram_123456.md       ← active memory, always ≤ 200 lines
-    └── telegram_123456_log.md   ← deep memory, archived content
+    └── telegram_123456_log.md   ← deep memory, on-demand only
 ```
 
 ## Memory File Format
@@ -38,25 +58,30 @@ _last_updated: 2026-05-20_
 - [2026-05-20] 修正：...
 ```
 
+Target size: ≤ 200 lines.
+
 ## Log File
 
-`{user_id}_log.md` holds content removed during compaction. It is **not** loaded into Hermes context by default — it is deep memory, retrieved on demand when the user asks about older context or when a query clearly requires historical information.
+`{user_id}_log.md` holds content removed during compaction. It is **not** loaded into Hermes context by default. It is deep memory — retrieved on demand when the user asks about older context or when a query clearly requires historical information.
 
-Format: rolling appends of summarised removed entries, with a timestamp per compaction run.
+Each compaction appends a timestamped summary block of what was removed.
 
-## Lifecycle Hooks
+## MemoryProvider Methods
 
-### `initialize()`
-Ensure `users/` directory exists.
+### `initialize(session_id, **kwargs)`
+Ensure `users/` directory exists. Resolve `user_id` from `session_id`.
 
-### `prefetch(user_id)`
-Read `{user_id}.md` and inject into Hermes system prompt.
+### `get_tool_schemas()` / `handle_tool_call()`
+Expose a `load_deep_memory` tool so the LLM can fetch `{user_id}_log.md` on demand.
 
-### `sync_turn(user_id, turn)`
-Append raw turn to in-memory buffer. Zero LLM cost.
+### Prefetch (before each turn)
+Read `{user_id}.md` and inject into system prompt. Hermes calls this automatically.
+
+### Sync turn (after each response)
+Append the turn to the in-memory buffer. Zero LLM cost. Hermes calls this automatically.
 
 ### `_extract_and_persist(user_id)`
-Makes **one LLM call** to classify the buffer:
+Makes **one `ctx.llm.acomplete_structured()` call** to classify the buffer:
 
 ```json
 {
@@ -66,32 +91,29 @@ Makes **one LLM call** to classify the buffer:
 
 Applies ops to `{user_id}.md`. Writes are atomic (tmp file + rename).
 
-If the LLM response is not valid JSON, log a warning and skip — do not crash.
+If the response is not valid JSON or is missing required fields, log a warning and skip — do not crash.
 
-Triggered by:
-- **(A) `on_session_end()`** — always fires at session end
-- **(B) `compact()`** — fires after compaction to flush the current buffer into the freshly compacted file
+**Triggered by:**
+- **(A) Session end** — `on_session_end()` fires this if buffer is non-empty
+- **(B) After `compact()`** — flushes buffered turns into the freshly compacted file
 
 ### `compact(user_id)`
-Triggered when `{user_id}.md` exceeds ~200 lines.
+Triggered when `{user_id}.md` exceeds ~200 lines:
 
-1. LLM identifies and removes least-referenced entries, rewriting the file to ≤ 200 lines.
+1. One `ctx.llm.acomplete_structured()` call identifies and removes least-referenced entries, rewriting the file to ≤ 200 lines.
 2. Removed entries are summarised and appended to `{user_id}_log.md` with a timestamp.
-3. After compaction, `_extract_and_persist()` is called to merge any buffered turns into the compacted file.
+3. `_extract_and_persist()` is called to merge any buffered turns into the compacted file.
 
 Writes are atomic (tmp file + rename).
 
-### `on_session_end(user_id)`
+### `on_session_end()`
 Trigger `_extract_and_persist()` if buffer is non-empty.
-
-### `shutdown()`
-Wait for any pending writes to finish.
 
 ## User ID Convention
 
 Format: `{channel}_{platform_id}` (e.g. `telegram_123456`, `discord_alice`).
 
-Passed directly by the bot — no alias resolution in v1.
+In v1, passed directly from the bot with no alias resolution:
 
 ```python
 reply = await agent.chat(message, user_id=f"telegram_{user_id}")
