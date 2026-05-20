@@ -7,17 +7,16 @@ status: accepted
 ## What MMD Does (v1)
 
 1. Before each reply: load `{user_id}.md` into Hermes context
-2. After the session: one Gemini Flash call classifies what changed → update `{user_id}.md`
-
-That's it.
+2. After the session: one LLM call classifies what changed → update `{user_id}.md`
+3. When memory file exceeds ~200 lines: compact it, archive removed content to `{user_id}_log.md`
 
 ## Storage Layout
 
 ```
 $MMD_DATA_DIR/
 └── users/
-    ├── telegram_123456.md
-    └── discord_alice.md
+    ├── telegram_123456.md       ← active memory, always ≤ 200 lines
+    └── telegram_123456_log.md   ← deep memory, archived content
 ```
 
 ## Memory File Format
@@ -39,7 +38,11 @@ _last_updated: 2026-05-20_
 - [2026-05-20] 修正：...
 ```
 
-Target size: ≤ 200 lines. When exceeded, LLM compresses by removing least-referenced entries; a summary of what was removed is appended to `{user_id}_log.md`.
+## Log File
+
+`{user_id}_log.md` holds content removed during compaction. It is **not** loaded into Hermes context by default — it is deep memory, retrieved on demand when the user asks about older context or when a query clearly requires historical information.
+
+Format: rolling appends of summarised removed entries, with a timestamp per compaction run.
 
 ## Lifecycle Hooks
 
@@ -53,11 +56,7 @@ Read `{user_id}.md` and inject into Hermes system prompt.
 Append raw turn to in-memory buffer. Zero LLM cost.
 
 ### `_extract_and_persist(user_id)`
-Triggered by whichever comes first:
-- **(A)** Buffer reaches 50% of session context limit (default: 2000 tokens)
-- **(B)** Session ends
-
-Makes **one Gemini Flash call** to classify the buffer:
+Makes **one LLM call** to classify the buffer:
 
 ```json
 {
@@ -65,7 +64,22 @@ Makes **one Gemini Flash call** to classify the buffer:
 }
 ```
 
-Applies the ops to `{user_id}.md`. Writes are atomic (tmp file + rename).
+Applies ops to `{user_id}.md`. Writes are atomic (tmp file + rename).
+
+If the LLM response is not valid JSON, log a warning and skip — do not crash.
+
+Triggered by:
+- **(A) `on_session_end()`** — always fires at session end
+- **(B) `compact()`** — fires after compaction to flush the current buffer into the freshly compacted file
+
+### `compact(user_id)`
+Triggered when `{user_id}.md` exceeds ~200 lines.
+
+1. LLM identifies and removes least-referenced entries, rewriting the file to ≤ 200 lines.
+2. Removed entries are summarised and appended to `{user_id}_log.md` with a timestamp.
+3. After compaction, `_extract_and_persist()` is called to merge any buffered turns into the compacted file.
+
+Writes are atomic (tmp file + rename).
 
 ### `on_session_end(user_id)`
 Trigger `_extract_and_persist()` if buffer is non-empty.
