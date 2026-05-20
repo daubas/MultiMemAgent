@@ -67,26 +67,27 @@ The plugin is a small stateful adapter around the Markdown files:
    - Inject a compact memory summary into the system prompt.
 
 3. `sync_turn()`
-   - Run asynchronously after the turn.
-   - Acts as the **single classification authority** — decides what goes to private memory and what goes to the shared wiki.
-   - Keep the write path non-blocking for the chat response.
+   - Buffers the raw conversation turn — **zero LLM cost per turn**.
+   - Does not classify or write to disk immediately.
 
-### sync_turn() Classification Flow
-
-`sync_turn()` uses Gemini Flash to classify the full conversation turn and route each piece of information:
+4. `_extract_and_persist()` — triggered by whichever comes first:
+   - **(A) Context pressure threshold** — when buffered turns exceed a token/turn count threshold (mirrors Hermes' compression trigger at ~50% context limit).
+   - **(B) Explicit session end** — `on_session_end()` fires this regardless of buffer size.
+   - Makes **one Gemini Flash call** per trigger to classify the entire buffer at once.
+   - Routes results: private updates → enqueue write to `{user_id}.md`; wiki candidates → passed to llm-wiki at 3am.
+   - Clears the buffer after extraction.
 
 ```
 Turn ends
-│
-└─ sync_turn() — Gemini Flash reads full turn
-      │
-      ├─ private_updates  →  ADD/UPDATE/DELETE/NOOP  →  enqueue write to {user_id}.md
-      │
-      └─ wiki_candidates  →  trigger /llm-wiki with candidate content
+└─ sync_turn(): buffer raw turn (no LLM)
+
+Context pressure OR session end
+└─ _extract_and_persist(): ONE Gemini Flash call
+      ├─ private  →  ADD/UPDATE/DELETE/NOOP  →  write {user_id}.md
+      └─ wiki     →  queued for llm-wiki at 3am
 ```
 
-Gemini Flash prompt output structure:
-
+Gemini Flash prompt output:
 ```json
 {
   "private": [{"op": "ADD|UPDATE|DELETE|NOOP", "content": "..."}],
@@ -94,13 +95,13 @@ Gemini Flash prompt output structure:
 }
 ```
 
-Wiki criteria: 2+ sources, OR central to one source AND substantial synthesis that would be painful to re-derive. Everything else is private or NOOP.
+Wiki criteria: 2+ sources or central to one source AND substantial synthesis painful to re-derive.
 
-This resolves two issues:
-- **A2**: `sync_turn()` runs every turn regardless of tool call count — no shared knowledge is lost due to the ≥5 tool calls heuristic.
-- **B8**: classification and routing are one atomic step — the same content cannot appear in both private memory and the wiki.
+Result: short sessions → 1 LLM call at end; long sessions → 1 call at pressure threshold + 1 NOOP at end. No per-turn LLM cost.
 
-4. `on_session_end()`
+This design is inspired by Hermes' context-pressure compression model (trigger by threshold) and Mem0's explicit-add model (trigger by event), combined.
+
+5. `on_session_end()`
    - Flush any pending updates.
    - Persist the latest snapshot before the session closes.
 
