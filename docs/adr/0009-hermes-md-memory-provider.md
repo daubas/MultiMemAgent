@@ -101,6 +101,36 @@ Wiki criteria: 2+ sources or central to one source AND substantial synthesis pai
 
 Result: short sessions → 1 LLM call at end; long sessions → 1 call at pressure threshold + 1 NOOP at end. No per-turn LLM cost.
 
+### `_wiki_queue` JSONL Schema
+
+Each line in `_wiki_queue/<YYYYMMDD>.jsonl` is one JSON object:
+
+```json
+{
+  "v": 1,
+  "ts": "2026-05-20T15:30:00Z",
+  "user_id": "telegram_123456",
+  "content": "...",
+  "reason": "2+ sources / substantial synthesis",
+  "hint_page": "optional/page-slug"
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `v` | yes | Schema version. Consumer skips and logs a warning on `v != 1`. |
+| `ts` | yes | ISO-8601 UTC write time. Used for ordering and audit. |
+| `user_id` | yes | Source user. For attribution and audit only — llm-wiki does not personalise output per user. |
+| `content` | yes | Wiki candidate text extracted by Gemini Flash. |
+| `reason` | yes | Why this was classified as wiki-worthy. Passed to llm-wiki as synthesis context. |
+| `hint_page` | no | Suggested target page slug. llm-wiki may ignore or override. |
+
+**3am consumer rules:**
+- Read only `<today>.jsonl`; yesterday's file is treated as already processed.
+- Skip any entry where `v != 1` (log warning).
+- Pass all entries to llm-wiki as a batch; llm-wiki handles deduplication and cross-entry synthesis.
+- After the full file is processed, rename `<YYYYMMDD>.jsonl` → `<YYYYMMDD>.jsonl.done` to prevent re-processing on cron retry.
+
 This design is inspired by Hermes' context-pressure compression model (trigger by threshold) and Mem0's explicit-add model (trigger by event), combined.
 
 5. `on_session_end()`
@@ -170,7 +200,9 @@ When a user wants to merge their identities across channels, they initiate a **p
 
 After pairing, `set_user()` resolves any alias to the canonical name before any read or write.
 
-The canonical name is always the `initiator_id` (the channel ID of the side that ran `/pair`). User-supplied custom names are not supported.
+**Canonical name priority rule:** the initiator's existing canonical group wins; the confirmer's group is absorbed into it. If the initiator has no existing entry, `initiator_id` itself becomes the canonical name. If only the confirmer is already registered, the confirmer's canonical name is reused and `initiator_id` is appended to it. User-supplied custom names are not supported.
+
+This matches the `_merge()` implementation in `src/pairing.py` and ensures that existing pairings are never silently renamed.
 
 Pairing requires action from both sides to prevent impersonation.
 

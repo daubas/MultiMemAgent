@@ -36,16 +36,17 @@ This means:
 
 ### Tooling
 
-**`llm-wiki` skill** handles all content decisions: trigger classification, page routing, cross-referencing, and consistency linting. It is invoked via `/llm-wiki` or triggered automatically when Hermes detects a knowledge-work workflow (≥5 tool calls) or when the conversation references wiki/knowledge topics.
+**`llm-wiki` skill** handles all content decisions: trigger classification, page routing, cross-referencing, and consistency linting. In this system, **llm-wiki is called only by the 3am cron** — Hermes' default auto-trigger behaviour (on ≥5 tool calls or wiki topic detection) is disabled.
 
 **Setup (one-time):**
 1. Clone the wiki GitHub repo locally.
 2. `hermes config set skills.config.wiki.path <path to clone>`
-3. Ensure git credentials (PAT or SSH key) are configured for that repo — llm-wiki is not involved in authentication.
+3. `hermes config set skills.config.llm-wiki.auto_trigger false`
+4. Ensure git credentials (PAT or SSH key) are configured for that repo — llm-wiki is not involved in authentication.
 
 llm-wiki initialises the directory with `SCHEMA.md`, `index.md`, `log.md` on first use if they do not exist.
 
-**3am cron diff base:** `git diff origin/main` — captures all uncommitted changes llm-wiki wrote during the day.
+**3am cron diff base:** `git diff origin/main` — captures all changes llm-wiki wrote during the batch run.
 
 **GitHub skill** handles all Git and PR operations via natural language commands (e.g. `/github-pr-workflow`), not a structured parameter API.
 
