@@ -18,6 +18,12 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+try:
+    from agent.memory_provider import MemoryProvider as _MemoryProviderBase
+except ImportError:
+    class _MemoryProviderBase:  # type: ignore[no-redef]
+        pass
+
 _LINE_LIMIT = 200
 
 # ---------------------------------------------------------------------------
@@ -120,31 +126,32 @@ class MemoryStore:
 class MemoryClassifier:
     """Classifies conversation turns into ADD/UPDATE/DELETE/NOOP memory ops."""
 
-    def __init__(self, ctx: Any) -> None:
-        self._ctx = ctx
+    def __init__(self, llm: Any = None) -> None:
+        self._llm = llm  # injected in tests; None → lazy PluginLlm in production
+
+    def _get_llm(self) -> Any:
+        if self._llm is None:
+            from agent.plugin_llm import PluginLlm
+            self._llm = PluginLlm(plugin_id="mmd")
+        return self._llm
 
     def classify(self, turns: list[tuple[str, str]], current_memory: str) -> list[dict]:
         """Returns list of op dicts, or [] on failure."""
         turns_text = "\n".join(f"User: {u}\nAssistant: {a}" for u, a in turns)
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a memory manager. Given a conversation and the user's current memory, "
-                    "classify what should be added, updated, deleted, or left unchanged (NOOP).\n"
-                    f"Current memory:\n{current_memory or '(empty)'}"
-                ),
-            },
-            {
-                "role": "user",
-                "content": f"Conversation:\n{turns_text}\n\nClassify memory operations.",
-            },
-        ]
+        instructions = (
+            "You are a memory manager. Given a conversation and the user's current memory, "
+            "classify what should be added, updated, deleted, or left unchanged (NOOP).\n"
+            f"Current memory:\n{current_memory or '(empty)'}"
+        )
         try:
-            result = self._ctx.llm.complete_structured(messages=messages, schema=CLASSIFICATION_SCHEMA)
-            if not result or not result.data:
+            result = self._get_llm().complete_structured(
+                instructions=instructions,
+                input=[{"type": "text", "text": f"Conversation:\n{turns_text}\n\nClassify memory operations."}],
+                json_schema=CLASSIFICATION_SCHEMA,
+            )
+            if not result or not result.parsed:
                 return []
-            return result.data.get("private", [])
+            return result.parsed.get("private", [])
         except Exception:
             logger.warning("MemoryClassifier: LLM call failed", exc_info=True)
             return []
@@ -157,27 +164,31 @@ class MemoryClassifier:
 class MemoryCompactor:
     """Compacts a memory file to ≤200 lines while archiving removed content."""
 
-    def __init__(self, ctx: Any) -> None:
-        self._ctx = ctx
+    def __init__(self, llm: Any = None) -> None:
+        self._llm = llm  # injected in tests; None → lazy PluginLlm in production
+
+    def _get_llm(self) -> Any:
+        if self._llm is None:
+            from agent.plugin_llm import PluginLlm
+            self._llm = PluginLlm(plugin_id="mmd")
+        return self._llm
 
     def compact(self, content: str) -> tuple[str, str]:
         """Returns (compacted_content, removed_summary). Falls back to original on failure."""
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a memory compactor. Rewrite the memory file to under 200 lines "
-                    "by removing the least important or least recently referenced entries. "
-                    "Return the compacted file and a brief summary of what was removed."
-                ),
-            },
-            {"role": "user", "content": content},
-        ]
+        instructions = (
+            "You are a memory compactor. Rewrite the memory file to under 200 lines "
+            "by removing the least important or least recently referenced entries. "
+            "Return the compacted file and a brief summary of what was removed."
+        )
         try:
-            result = self._ctx.llm.complete_structured(messages=messages, schema=COMPACTION_SCHEMA)
-            if not result or not result.data:
+            result = self._get_llm().complete_structured(
+                instructions=instructions,
+                input=[{"type": "text", "text": content}],
+                json_schema=COMPACTION_SCHEMA,
+            )
+            if not result or not result.parsed:
                 return content, ""
-            return result.data.get("compacted", content), result.data.get("removed_summary", "")
+            return result.parsed.get("compacted", content), result.parsed.get("removed_summary", "")
         except Exception:
             logger.warning("MemoryCompactor: LLM call failed", exc_info=True)
             return content, ""
@@ -214,7 +225,7 @@ def _apply_ops(content: str, ops: list[dict]) -> str:
 # Depends on abstractions (MemoryStore, MemoryClassifier, MemoryCompactor)
 # ---------------------------------------------------------------------------
 
-class MMDProvider:
+class MMDProvider(_MemoryProviderBase):
     """
     Hermes MemoryProvider plugin for per-user Markdown memory.
 
@@ -225,12 +236,10 @@ class MMDProvider:
 
     def __init__(
         self,
-        ctx: Any,
         store: MemoryStore,
         classifier: MemoryClassifier,
         compactor: MemoryCompactor,
     ) -> None:
-        self._ctx = ctx
         self._store = store
         self._classifier = classifier
         self._compactor = compactor
@@ -322,10 +331,54 @@ class MMDProvider:
 # Plugin entry point
 # ---------------------------------------------------------------------------
 
+# Singleton — shared between memory loader (_ProviderCollector) and
+# general plugin loader (real PluginContext) so both see the same instance.
+_active_provider: "MMDProvider | None" = None
+
+
+def _mmd_command(raw_args: str) -> str:
+    """Handler for /mmd slash command."""
+    provider = _active_provider
+    if provider is None:
+        return "(mmd: not initialized)"
+
+    sub = (raw_args or "").strip().lower()
+    session_id = provider._current_session_id
+    user_id = provider._sessions.get(session_id) if session_id else None
+
+    if sub in ("show", ""):
+        if not user_id:
+            return "(mmd: no active session)"
+        content = provider._store.read_memory(user_id)
+        return content if content.strip() else "(mmd: memory is empty)"
+
+    if sub == "flush":
+        if not session_id or not provider._buffers.get(session_id):
+            return "(mmd: nothing to flush)"
+        provider._extract_and_persist(session_id)
+        return "(mmd: flushed)"
+
+    return "/mmd [show|flush]\n  show  — display current memory\n  flush — extract and save buffer now"
+
+
 def register(ctx: Any) -> None:
+    global _active_provider
     import os
     data_dir = Path(os.environ.get("MMD_DATA_DIR", str(Path.home() / ".hermes" / "mmd")))
-    store = MemoryStore(data_dir)
-    classifier = MemoryClassifier(ctx)
-    compactor = MemoryCompactor(ctx)
-    ctx.register_memory_provider(MMDProvider(ctx, store, classifier, compactor))
+
+    if _active_provider is None:
+        store = MemoryStore(data_dir)
+        classifier = MemoryClassifier()
+        compactor = MemoryCompactor()
+        _active_provider = MMDProvider(store, classifier, compactor)
+
+    if hasattr(ctx, "register_memory_provider"):
+        ctx.register_memory_provider(_active_provider)
+
+    if hasattr(ctx, "register_command"):
+        ctx.register_command(
+            "mmd",
+            _mmd_command,
+            description="MMD memory: show current memory or flush buffer now",
+            args_hint="[show|flush]",
+        )

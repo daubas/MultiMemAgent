@@ -85,41 +85,38 @@ class TestMemoryStore:
 class TestMemoryClassifier:
     def setup_method(self):
         from src.mmd import MemoryClassifier
-        self.ctx = Mock()
-        self.classifier = MemoryClassifier(self.ctx)
+        self.mock_llm = Mock()
+        self.classifier = MemoryClassifier(llm=self.mock_llm)
 
     def test_classify_returns_ops_from_llm(self):
-        self.ctx.llm.complete_structured.return_value = Mock(
-            data={"private": [{"op": "ADD", "content": "用戶喜歡 Python"}]}
+        self.mock_llm.complete_structured.return_value = Mock(
+            parsed={"private": [{"op": "ADD", "content": "用戶喜歡 Python"}]}
         )
         result = self.classifier.classify([("I like Python", "Great!")], "")
         assert result == [{"op": "ADD", "content": "用戶喜歡 Python"}]
 
     def test_classify_returns_empty_list_on_none_response(self):
-        self.ctx.llm.complete_structured.return_value = Mock(data=None)
+        self.mock_llm.complete_structured.return_value = Mock(parsed=None)
         result = self.classifier.classify([("hello", "hi")], "")
         assert result == []
 
     def test_classify_returns_empty_list_on_exception(self):
-        self.ctx.llm.complete_structured.side_effect = RuntimeError("LLM error")
+        self.mock_llm.complete_structured.side_effect = RuntimeError("LLM error")
         result = self.classifier.classify([("hello", "hi")], "")
         assert result == []
 
     def test_classify_passes_current_memory_to_llm(self):
-        self.ctx.llm.complete_structured.return_value = Mock(data={"private": []})
+        self.mock_llm.complete_structured.return_value = Mock(parsed={"private": []})
         self.classifier.classify([("hello", "hi")], "existing memory content")
-        call_args = self.ctx.llm.complete_structured.call_args
-        messages = call_args.kwargs.get("messages") or call_args.args[0]
-        system_content = next(m["content"] for m in messages if m["role"] == "system")
-        assert "existing memory content" in system_content
+        call_kwargs = self.mock_llm.complete_structured.call_args.kwargs
+        assert "existing memory content" in call_kwargs["instructions"]
 
     def test_classify_passes_turns_to_llm(self):
-        self.ctx.llm.complete_structured.return_value = Mock(data={"private": []})
+        self.mock_llm.complete_structured.return_value = Mock(parsed={"private": []})
         self.classifier.classify([("user says this", "assistant says that")], "")
-        call_args = self.ctx.llm.complete_structured.call_args
-        messages = call_args.kwargs.get("messages") or call_args.args[0]
-        user_content = next(m["content"] for m in messages if m["role"] == "user")
-        assert "user says this" in user_content
+        call_kwargs = self.mock_llm.complete_structured.call_args.kwargs
+        input_text = call_kwargs["input"][0]["text"]
+        assert "user says this" in input_text
 
 
 # ---------------------------------------------------------------------------
@@ -129,25 +126,25 @@ class TestMemoryClassifier:
 class TestMemoryCompactor:
     def setup_method(self):
         from src.mmd import MemoryCompactor
-        self.ctx = Mock()
-        self.compactor = MemoryCompactor(self.ctx)
+        self.mock_llm = Mock()
+        self.compactor = MemoryCompactor(llm=self.mock_llm)
 
     def test_compact_returns_compacted_and_summary(self):
-        self.ctx.llm.complete_structured.return_value = Mock(
-            data={"compacted": "# Memory\n- kept fact", "removed_summary": "removed: old fact"}
+        self.mock_llm.complete_structured.return_value = Mock(
+            parsed={"compacted": "# Memory\n- kept fact", "removed_summary": "removed: old fact"}
         )
         compacted, summary = self.compactor.compact("long content")
         assert compacted == "# Memory\n- kept fact"
         assert summary == "removed: old fact"
 
     def test_compact_returns_original_on_none_response(self):
-        self.ctx.llm.complete_structured.return_value = Mock(data=None)
+        self.mock_llm.complete_structured.return_value = Mock(parsed=None)
         compacted, summary = self.compactor.compact("original content")
         assert compacted == "original content"
         assert summary == ""
 
     def test_compact_returns_original_on_exception(self):
-        self.ctx.llm.complete_structured.side_effect = RuntimeError("LLM error")
+        self.mock_llm.complete_structured.side_effect = RuntimeError("LLM error")
         compacted, summary = self.compactor.compact("original content")
         assert compacted == "original content"
         assert summary == ""
@@ -209,7 +206,7 @@ class TestMMDProvider:
         self.store.line_count.return_value = 0
         self.classifier.classify.return_value = []
         self.compactor.compact.return_value = ("compacted", "removed")
-        self.provider = MMDProvider(self.ctx, self.store, self.classifier, self.compactor)
+        self.provider = MMDProvider(self.store, self.classifier, self.compactor)
 
     # --- basic interface ---
 
@@ -397,3 +394,78 @@ class TestMMDProvider:
     def test_handle_unknown_tool_returns_message(self):
         result = self.provider.handle_tool_call("unknown_tool", {})
         assert "unknown" in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# /mmd slash command
+# ---------------------------------------------------------------------------
+
+class TestMmdCommand:
+    def setup_method(self):
+        import src.mmd as mmd_module
+        from src.mmd import MMDProvider
+        self.mmd_module = mmd_module
+        self.store = Mock()
+        self.classifier = Mock()
+        self.compactor = Mock()
+        self.store.is_available.return_value = True
+        self.store.read_memory.return_value = ""
+        self.store.read_log.return_value = ""
+        self.classifier.classify.return_value = []
+        self.compactor.compact.return_value = ("compacted", "removed")
+        self.provider = MMDProvider(self.store, self.classifier, self.compactor)
+        mmd_module._active_provider = self.provider
+
+    def teardown_method(self):
+        self.mmd_module._active_provider = None
+
+    def test_show_returns_memory_contents(self):
+        from src.mmd import _mmd_command
+        self.provider.initialize("sess_1", user_id="telegram_123")
+        self.store.read_memory.return_value = "- fact A\n- fact B"
+        result = _mmd_command("show")
+        assert "fact A" in result
+
+    def test_show_empty_memory(self):
+        from src.mmd import _mmd_command
+        self.provider.initialize("sess_1", user_id="telegram_123")
+        self.store.read_memory.return_value = ""
+        result = _mmd_command("show")
+        assert "empty" in result.lower()
+
+    def test_no_args_same_as_show(self):
+        from src.mmd import _mmd_command
+        self.provider.initialize("sess_1", user_id="telegram_123")
+        self.store.read_memory.return_value = "- fact"
+        assert _mmd_command("") == _mmd_command("show")
+
+    def test_show_no_active_session(self):
+        from src.mmd import _mmd_command
+        result = _mmd_command("show")
+        assert "session" in result.lower()
+
+    def test_flush_triggers_extract(self):
+        from src.mmd import _mmd_command
+        self.provider.initialize("sess_1", user_id="telegram_123")
+        self.provider.sync_turn("hello", "hi", session_id="sess_1")
+        self.classifier.classify.return_value = [{"op": "ADD", "content": "new fact"}]
+        result = _mmd_command("flush")
+        assert "flushed" in result.lower()
+        self.classifier.classify.assert_called_once()
+
+    def test_flush_empty_buffer(self):
+        from src.mmd import _mmd_command
+        self.provider.initialize("sess_1", user_id="telegram_123")
+        result = _mmd_command("flush")
+        assert "nothing" in result.lower()
+
+    def test_unknown_subcommand_shows_help(self):
+        from src.mmd import _mmd_command
+        result = _mmd_command("unknown")
+        assert "show" in result and "flush" in result
+
+    def test_no_provider_returns_not_initialized(self):
+        from src.mmd import _mmd_command
+        self.mmd_module._active_provider = None
+        result = _mmd_command("show")
+        assert "not initialized" in result.lower()

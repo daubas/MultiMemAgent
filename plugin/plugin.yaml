@@ -1,5 +1,6 @@
 name: mmd
 version: 1.0.0
 description: "MultiMemD — per-user Markdown memory for Hermes. Zero infrastructure dependency."
+kind: standalone
 hooks:
   - on_session_end
