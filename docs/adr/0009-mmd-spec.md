@@ -87,7 +87,19 @@ Return `"mmd"`.
 Return `True` if `$MMD_DATA_DIR` is configured and accessible.
 
 ### `initialize(session_id: str, **kwargs) -> None`
-Ensure `users/` directory exists. Read `user_id` from `kwargs` — always passed explicitly by the host bot, never inferred from `session_id` (same pattern as mem0).
+Ensure `users/` directory exists. Read `user_id` from `kwargs` and store the `session_id → user_id` mapping. All subsequent method calls only receive `session_id`, so this mapping is the sole way to look up the correct user.
+
+```python
+# Inside MMDProvider
+self._sessions: dict[str, str] = {}
+
+def initialize(self, session_id, **kwargs):
+    self._sessions[session_id] = kwargs["user_id"]
+
+def prefetch(self, query, *, session_id=""):
+    user_id = self._sessions[session_id]  # look up from mapping
+    # read {user_id}.md ...
+```
 
 ```python
 # Bot side
