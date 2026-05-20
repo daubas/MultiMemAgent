@@ -106,17 +106,22 @@ class PairingManager:
         self._write_pairing(code, payload)
         return code
 
-    def confirm(self, confirmer_id: str, code: str) -> tuple[str, list[str]]:
+    def confirm(self, confirmer_id: str, code: str) -> tuple[str, list[str], list[str]]:
         """Confirm a pairing request from a different channel.
 
         *confirmer_id* is the channel ID of the user who received the code and
         is now submitting it.  *code* is case-insensitive.
 
-        Returns (canonical_name, merged_ids) where *canonical_name* is the key
-        stored in identity.json and *merged_ids* is the full list of channel IDs
-        now linked under that name.
+        Returns (canonical_name, merged_ids, memory_files_to_merge) where:
+          - *canonical_name* is the key stored in identity.json (always initiator_id).
+          - *merged_ids* is the full list of channel IDs now linked under that name.
+          - *memory_files_to_merge* lists the .md file paths the caller must merge
+            via LLM into canonical_name.md (empty list if nothing to merge).
+
+        The actual LLM-based memory file merge is the caller's responsibility.
 
         Raises:
+            PairingError    — self-confirm attempt.
             CodeNotFound    — no matching request file.
             CodeExpired     — TTL elapsed.
             TooManyAttempts — attempts >= MAX_ATTEMPTS.
@@ -124,6 +129,9 @@ class PairingManager:
         """
         code = code.upper()
         payload = self._load_pairing(code)  # raises CodeNotFound
+
+        if confirmer_id == payload["initiator_id"]:
+            raise PairingError("Cannot confirm your own pairing request")
 
         # Expiry check
         if _is_expired(payload["expires_at"]):
@@ -172,7 +180,16 @@ class PairingManager:
             lock_fd.close()
 
         self._delete_pairing(code)
-        return canonical_name, merged_ids
+
+        # Identify memory files that need LLM merging by the caller.
+        users_dir = self._root / "users"
+        memory_files_to_merge: list[str] = []
+        for cid in merged_ids:
+            path = users_dir / f"{cid}.md"
+            if path.exists() and cid != canonical_name:
+                memory_files_to_merge.append(str(path))
+
+        return canonical_name, merged_ids, memory_files_to_merge
 
     def cleanup_expired(self) -> None:
         """Delete all expired _pairing/*.json files."""

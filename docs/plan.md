@@ -32,7 +32,7 @@ Build an agent runtime that can help multiple users maintain an LLM Wiki with Gi
 - **Read**：載入用戶 Markdown 記憶檔與相關 Wiki 頁面
 - **Summarize**：萃取本輪對話中值得持久化的資訊，分類為 ADD / UPDATE / DELETE / NOOP
 - **Propose**：若屬共享知識，llm-wiki 直接寫入本地 wiki 工作樹（不立即開 PR）；若屬用戶私人記憶，寫入 `{user_id}.md`
-- **Edit**：每天凌晨 3 點 cron 將當日累積的 wiki 變更 commit 並開 PR；PR 合併後 repo 即為新的真實來源；私人記憶在 `sync_turn()` 後立即生效
+- **Edit**：每天凌晨 3 點 cron 將當日累積的 wiki 變更 commit 並開 PR；PR 合併後 repo 即為新的真實來源；私人記憶在 `_extract_and_persist()` 執行後生效（context 壓力達 50% 或 session 結束時觸發）
 
 ### Hermes Tool / Skill Wiring
 `llm-wiki` skill 與 MCP 連接方式**由 Hermes 原生設定處理**，不另立 ADR。

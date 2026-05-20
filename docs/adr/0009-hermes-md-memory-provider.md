@@ -71,7 +71,7 @@ The plugin is a small stateful adapter around the Markdown files:
    - Does not classify or write to disk immediately.
 
 4. `_extract_and_persist()` — triggered by whichever comes first:
-   - **(A) Context pressure threshold** — when buffered turns exceed a token/turn count threshold (mirrors Hermes' compression trigger at ~50% context limit).
+   - **(A) Context pressure threshold** — when accumulated buffered content reaches **50% of the session context limit** (mirrors Hermes' compression trigger). Default: trigger at 2000 tokens of buffered turns, assuming a 4000-token session context limit. Configurable via `memory.context_limit`.
    - **(B) Explicit session end** — `on_session_end()` fires this regardless of buffer size.
    - Makes **one Gemini Flash call** per trigger to classify the entire buffer at once.
    - Routes results: private updates → enqueue write to `{user_id}.md`; wiki candidates → passed to llm-wiki at 3am.
@@ -168,7 +168,7 @@ When a user wants to merge their identities across channels, they initiate a **p
 
 After pairing, `set_user()` resolves any alias to the canonical name before any read or write.
 
-The canonical name defaults to the channel ID of the initiating side, or a user-supplied name.
+The canonical name is always the `initiator_id` (the channel ID of the side that ran `/pair`). User-supplied custom names are not supported.
 
 Pairing requires action from both sides to prevent impersonation.
 
