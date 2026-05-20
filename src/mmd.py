@@ -265,14 +265,16 @@ class MMDProvider(_MemoryProviderBase):
         self._store.ensure_dirs()
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
-        user_id = self._sessions.get(session_id)
+        sid = session_id or self._current_session_id
+        user_id = self._sessions.get(sid)
         if not user_id:
             return ""
         return self._store.read_memory(user_id)
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "") -> None:
-        if session_id in self._buffers:
-            self._buffers[session_id].append((user_content, assistant_content))
+        sid = session_id or self._current_session_id
+        if sid in self._buffers:
+            self._buffers[sid].append((user_content, assistant_content))
 
     def on_session_end(self, messages: list[dict]) -> None:
         session_id = self._current_session_id

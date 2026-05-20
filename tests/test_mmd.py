@@ -244,6 +244,12 @@ class TestMMDProvider:
     def test_prefetch_returns_empty_for_unknown_session(self):
         assert self.provider.prefetch("q", session_id="unknown") == ""
 
+    def test_prefetch_falls_back_to_current_session_when_session_id_empty(self):
+        # Hermes calls prefetch_all() without session_id — must fall back to _current_session_id
+        self.provider.initialize("sess_1", user_id="telegram_123")
+        self.store.read_memory.return_value = "- wedding 2026-07-26"
+        assert self.provider.prefetch("q", session_id="") == "- wedding 2026-07-26"
+
     # --- sync_turn ---
 
     def test_sync_turn_buffers_turns(self):
