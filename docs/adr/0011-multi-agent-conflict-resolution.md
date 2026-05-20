@@ -38,7 +38,7 @@ This means:
 - The LLM synthesizes new content with existing content, absorbing what would otherwise be overlapping edits.
 - By the time the 3am cron commits and opens a PR, the content is already LLM-resolved; there is no raw Git conflict to arbitrate.
 
-All agents write to the **same local wiki working tree** (single `wiki.path`). There are no separate per-agent branches during the day. The system runs as a **single Hermes process** — conversations are handled sequentially, so llm-wiki writes to the same page are never truly concurrent. No per-page locking or queue is required. The 3am cron opens one PR per changed page from that single working tree. Git worktree isolation is not used for daily writes; it remains available for rollback and investigation purposes only.
+All wiki writes happen at the **3am batch only** via MultiMemD (MMD): MMD accumulates wiki candidates in `_wiki_queue/<YYYYMMDD>.jsonl` during the day; the cron job feeds them to llm-wiki which synthesizes and writes to the single local wiki working tree (`wiki.path`). The system runs as a **single Hermes process** — conversations are handled sequentially, so there are no concurrent writes at any stage. No per-page locking or queue is required. The 3am cron opens one PR per changed page. Git worktree isolation is not used for daily writes; it remains available for rollback and investigation purposes only.
 
 ### Practical Rule
 

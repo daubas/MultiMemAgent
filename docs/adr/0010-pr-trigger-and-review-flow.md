@@ -20,11 +20,14 @@ Hermes has a native GitHub skill covering the full PR lifecycle (create branch, 
 
 Shared wiki changes are not pushed per conversation turn. They are batched and pushed to GitHub at **03:00 daily** via `hermes cron create "0 3 * * *"`.
 
-**Candidate persistence is handled by llm-wiki itself.** As a persistent Markdown knowledge base, llm-wiki writes content changes directly to the wiki path (local repo clone) during each conversation. There is no separate staging layer — the files on disk are the persistent state. A gateway restart between conversations does not lose any candidate because the changes are already written to the filesystem.
+**Candidate persistence is handled by MultiMemD (MMD).** During each conversation, MMD buffers wiki candidates in `_wiki_queue/<YYYYMMDD>.jsonl` — no llm-wiki call is made until the 3am batch. A gateway restart between conversations does not lose any candidate because the queue files are already on disk.
 
-The 3am cron job only needs to:
-1. Run `git diff` to identify what llm-wiki changed during the day.
-2. Use the GitHub skill to commit those changes and open a PR.
+The 3am cron job:
+1. Reads all entries in `_wiki_queue/<today>.jsonl`.
+2. Feeds each candidate to llm-wiki for synthesis and deduplication.
+3. llm-wiki writes the synthesized result to the local wiki working tree.
+4. Runs `git diff` to identify what changed.
+5. Uses the GitHub skill to commit those changes and open a PR.
 
 This means:
 - No PR spam from individual conversations.

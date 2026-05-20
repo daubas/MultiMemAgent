@@ -2,9 +2,9 @@
 status: accepted
 ---
 
-# GitHub-backed LLM Wiki with Hermes as Runtime and Markdown Memory Provider
+# GitHub-backed LLM Wiki with Hermes as Runtime and MultiMemD (MMD)
 
-We want a multi-user LLM Wiki workflow that keeps the wiki itself version-controlled in GitHub, uses Hermes as the agent runtime, and uses a Markdown Memory Provider (Mem0-inspired) for per-user memory isolation.
+We want a multi-user LLM Wiki workflow that keeps the wiki itself version-controlled in GitHub, uses Hermes as the agent runtime, and uses MultiMemD (MMD) — a self-built Markdown memory plugin — for per-user memory isolation.
 
 The deletion test for a separate knowledge service is favorable here: if the canonical wiki already lives in Markdown files under Git, then version history, diff review, branch-based conflict resolution, PR approval, and rollback already exist. A dedicated knowledge service would mostly duplicate the repository's strengths unless we need real-time shared mutation or task-claim coordination. For our use case, we do not.
 
@@ -22,7 +22,7 @@ The deletion test for a separate knowledge service is favorable here: if the can
   - Hermes is the editor / curator, not the canonical storage layer.
 
 - **Mem0 is an architectural reference only. It is not used as a runtime dependency.**
-  - The actual private memory store is the Hermes Markdown Memory Provider (see ADR-0009).
+  - The actual private memory store is MultiMemD (MMD) — see ADR-0009.
   - Mem0's entity-scoping model (user_id / agent_id / run_id) and ADD/UPDATE/DELETE/NOOP operation classification are used as design references.
   - Do not introduce Mem0 as a library or service dependency.
 
@@ -39,7 +39,7 @@ The deletion test for a separate knowledge service is favorable here: if the can
 - **GitHub repo only, no agent runtime.** Rejected.
   - We still want Hermes to curate content, manage profiles, and operate the wiki through MCP/tools.
 
-- **GitHub repo + Hermes + Markdown Memory Provider (Mem0-inspired).** Accepted.
+- **GitHub repo + Hermes + MultiMemD (MMD).** Accepted.
   - This keeps the wiki canonical and reviewable while giving agents a runtime and isolated memory.
   - Mem0 is referenced for its design patterns but not used as a runtime component.
 
@@ -51,7 +51,7 @@ The deletion test for a separate knowledge service is favorable here: if the can
 
 - **Agent behavior becomes easier to reason about.**
   - Hermes owns generation, editing, and maintenance workflows.
-  - Markdown Memory Provider keeps user-specific memory out of the shared wiki corpus.
+  - MultiMemD (MMD) keeps user-specific memory out of the shared wiki corpus.
 
 - **The wiki stays human-readable.**
   - Markdown remains the primary format.
@@ -69,14 +69,14 @@ The deletion test for a separate knowledge service is favorable here: if the can
 4. Shared wiki content is written as Markdown changes in the GitHub repo.
 5. The change is reviewed through PRs.
 6. After merge, the repo is the source of truth.
-7. Markdown Memory Provider stores only the user-scoped memory that should not become shared wiki content.
+7. MultiMemD (MMD) stores only the user-scoped memory that should not become shared wiki content.
 
 ## Practical Rule
 
 If the information should be:
 
 - **shared and reviewable** -> commit it to the GitHub wiki
-- **personalized or user-scoped** -> keep it in Markdown Memory Provider
+- **personalized or user-scoped** -> keep it in MultiMemD (MMD)
 - **agent behavior / editing workflow** -> let Hermes handle it
 
 ## References

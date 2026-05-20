@@ -2,9 +2,11 @@
 status: accepted
 ---
 
-# Hermes Markdown Memory Provider for Multi-User Isolation
+# MultiMemD — Multi-User Markdown Memory Daemon
 
-We want a low-cost, inspectable memory layer for Hermes that isolates memory per user, keeps the on-disk format human-readable, and avoids a vector database entirely.
+**MultiMemD (MMD)** is the self-built, open-source memory plugin for this project. It sits as a middleware layer between the channel bot (Telegram, Discord, etc.) and Hermes, managing per-user private memory and routing wiki candidates to the 3am llm-wiki batch.
+
+We want a low-cost, inspectable memory layer that isolates memory per user, keeps the on-disk format human-readable, and avoids a vector database entirely.
 
 This design intentionally treats memory as a small Markdown artifact rather than as a semantic retrieval system. The goal is not global recall across a large corpus; the goal is to keep a compact, user-scoped memory snapshot that Hermes can load quickly and update incrementally.
 
@@ -16,7 +18,7 @@ This design intentionally treats memory as a small Markdown artifact rather than
 | Vector database | Not used |
 | Retrieval | LLM reads the whole memory file directly |
 | Memory size | Roughly <= 200 lines is acceptable |
-| Integration | Self-built plugin (bot middleware wrapping Hermes); designed to be open-sourced and reusable independently of this project |
+| Integration | **MultiMemD (MMD)** — open-source middleware layer between channel bot and Hermes; reusable with any LLM runtime |
 
 ## File Layout
 
@@ -54,9 +56,9 @@ _last_updated: 2026-05-19_
 
 ## Plugin Lifecycle
 
-Hermes does not expose a pluggable memory provider interface. The lifecycle hooks below are **our own plugin design**, implemented at the bot middleware layer (sitting between the channel bot and Hermes). This plugin is self-contained and intended to be open-sourced independently of this project — any bot using Hermes (or other LLM runtimes) can adopt it.
+Hermes does not expose a pluggable memory provider interface. The lifecycle hooks below are **MultiMemD's own design**, implemented at the middleware layer between the channel bot and Hermes. MMD is self-contained and intended to be open-sourced independently — any bot using Hermes or other LLM runtimes can adopt it.
 
-The plugin is a small stateful adapter around the Markdown files:
+MMD is a small stateful adapter around the Markdown files:
 
 1. `initialize()`
    - Ensure `users_dir` exists.
@@ -84,7 +86,7 @@ Turn ends
 Context pressure OR session end
 └─ _extract_and_persist(): ONE Gemini Flash call
       ├─ private  →  ADD/UPDATE/DELETE/NOOP  →  write {user_id}.md
-      └─ wiki     →  queued for llm-wiki at 3am
+      └─ wiki     →  appended to `_wiki_queue/<YYYYMMDD>.jsonl` (processed by 3am cron)
 ```
 
 Gemini Flash prompt output:
@@ -244,5 +246,5 @@ Do not store full raw conversations in the memory provider path unless we explic
 ## Practical Rule
 
 - Shared and reviewable information belongs in the Git-backed wiki.
-- User-specific memory belongs in the Markdown memory provider.
+- User-specific memory belongs in MultiMemD (MMD).
 - Hermes owns the decision of what gets written where.

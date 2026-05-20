@@ -8,7 +8,7 @@ Build an agent runtime that can help multiple users maintain an LLM Wiki with Gi
 
 - GitHub repo stores the wiki content as Markdown.
 - Hermes runs the agent workflow and wiki-maintenance skills.
-- Markdown Memory Provider (Mem0-inspired, no Mem0 runtime dependency) handles per-user memory isolation.
+- MultiMemD (MMD) — self-built Markdown memory plugin, Mem0-inspired, no Mem0 runtime dependency — handles per-user memory isolation and wiki candidate buffering.
 - PRs and reviews are the change-control boundary.
 - Obsidian is read-only: for inspecting wiki pages and private memory files only. All writes go through llm-wiki.
 
