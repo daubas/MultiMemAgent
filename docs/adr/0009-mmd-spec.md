@@ -4,9 +4,16 @@ status: accepted
 
 # MMD v1 Spec — Per-User Memory
 
+## Design Basis
+
+MMD is a simplified version of mem0's memory model:
+- **Same**: per-user isolation, ADD/UPDATE/DELETE/NOOP classification, read-first → classify → write ordering
+- **Removed**: vector store, embedding model, graph memory, SQLite message buffer
+- **Changed**: one LLM call per session (not per turn) to reduce cost; 200-line file cap (because the whole file is loaded into context)
+
 ## Plugin Type
 
-MMD is a **Hermes Memory Provider plugin**, implementing the `MemoryProvider` abstract base class. Hermes handles the lifecycle integration automatically; MMD only needs to implement the required methods.
+MMD is a **Hermes Memory Provider plugin**, implementing the `MemoryProvider` abstract base class. Hermes handles lifecycle integration automatically.
 
 ## Plugin Structure
 
@@ -19,25 +26,27 @@ MMD is a **Hermes Memory Provider plugin**, implementing the `MemoryProvider` ab
 
 ## LLM Access
 
-MMD calls the user's configured Hermes model directly — no separate API key or provider needed:
+MMD uses the user's configured Hermes model directly:
 
 ```python
 result = await ctx.llm.acomplete_structured(
     messages=[...],
-    schema=CLASSIFICATION_SCHEMA   # ADD/UPDATE/DELETE/NOOP JSON schema
+    schema=CLASSIFICATION_SCHEMA
 )
 ```
 
-All calls are automatically audit-logged by Hermes with plugin ID and token usage.
+No separate API key or provider needed.
 
 ## Storage Layout
 
 ```
 $MMD_DATA_DIR/
 └── users/
-    ├── telegram_123456.md       ← active memory, always ≤ 200 lines
+    ├── telegram_123456.md       ← active memory, ≤ 200 lines
     └── telegram_123456_log.md   ← deep memory, on-demand only
 ```
+
+`$MMD_DATA_DIR` is configured via `plugin.yaml` and passed to `initialize()` as a kwarg.
 
 ## Memory File Format
 
@@ -58,21 +67,17 @@ _last_updated: 2026-05-20_
 - [2026-05-20] 修正：...
 ```
 
-Target size: ≤ 200 lines.
-
 ## Log File
 
-`{user_id}_log.md` holds content removed during compaction. It is **not** loaded into Hermes context by default. It is deep memory — retrieved on demand when the user asks about older context or when a query clearly requires historical information.
-
-Each compaction appends a timestamped summary block of what was removed.
+`{user_id}_log.md` holds content removed during compaction. Not loaded by default — deep memory, retrieved on demand via the `load_deep_memory` tool. Each compaction appends a timestamped summary block.
 
 ## MemoryProvider Methods
 
 ### `initialize(session_id, **kwargs)`
-Ensure `users/` directory exists. `user_id` is passed explicitly by the host bot via `kwargs` — it is never inferred from `session_id`. This follows mem0's pattern: identity is always the caller's responsibility.
+Ensure `users/` directory exists. Read `user_id` from `kwargs` — always passed explicitly by the host bot. Never inferred from `session_id` (same pattern as mem0).
 
 ```python
-# Bot side — before each conversation
+# Bot side
 await memory_provider.initialize(session_id, user_id=f"telegram_{message.from_user.id}")
 ```
 
@@ -85,8 +90,12 @@ Read `{user_id}.md` and inject into system prompt. Hermes calls this automatical
 ### Sync turn (after each response)
 Append the turn to the in-memory buffer. Zero LLM cost. Hermes calls this automatically.
 
+Buffer is in-memory only. If the process crashes before session end, that session's classification is skipped — acceptable for v1.
+
 ### `_extract_and_persist(user_id)`
-Makes **one `ctx.llm.acomplete_structured()` call** to classify the buffer:
+**Sequence (read → classify → write, same as mem0):**
+1. Take the full in-memory buffer
+2. One `ctx.llm.acomplete_structured()` call to classify:
 
 ```json
 {
@@ -94,32 +103,25 @@ Makes **one `ctx.llm.acomplete_structured()` call** to classify the buffer:
 }
 ```
 
-Applies ops to `{user_id}.md`. Writes are atomic (tmp file + rename).
+3. Apply ops to `{user_id}.md`. Write is atomic (tmp file + rename).
+4. Check line count. If `{user_id}.md` exceeds ~200 lines → call `compact()`.
+5. Clear the buffer.
 
-If the response is not valid JSON or is missing required fields, log a warning and skip — do not crash.
+If the LLM response is invalid, log a warning and skip — do not crash.
 
-**Triggered by:**
-- **(A) Session end** — `on_session_end()` fires this if buffer is non-empty
-- **(B) After `compact()`** — flushes buffered turns into the freshly compacted file
+Triggered by **session end only** (`on_session_end()`).
 
 ### `compact(user_id)`
-Triggered when `{user_id}.md` exceeds ~200 lines:
+Called by `_extract_and_persist()` after writing, when the file exceeds ~200 lines.
 
-1. One `ctx.llm.acomplete_structured()` call identifies and removes least-referenced entries, rewriting the file to ≤ 200 lines.
-2. Removed entries are summarised and appended to `{user_id}_log.md` with a timestamp.
-3. `_extract_and_persist()` is called to merge any buffered turns into the compacted file.
+1. One `ctx.llm.acomplete_structured()` call: rewrite file to ≤ 200 lines by removing least-referenced entries.
+2. Append removed entries as a timestamped summary to `{user_id}_log.md`.
+3. Write both files atomically (tmp file + rename).
 
-Writes are atomic (tmp file + rename).
+Buffer is already cleared at this point — no re-entrant call needed.
 
 ### `on_session_end()`
-Trigger `_extract_and_persist()` if buffer is non-empty.
+Call `_extract_and_persist()` if buffer is non-empty. Session boundary is provided by Hermes' gateway adapter (e.g. Telegram adapter).
 
-## User ID Convention
-
-Format: `{channel}_{platform_id}` (e.g. `telegram_123456`, `discord_alice`).
-
-In v1, passed directly from the bot with no alias resolution:
-
-```python
-reply = await agent.chat(message, user_id=f"telegram_{user_id}")
-```
+### `shutdown()`
+Wait for any pending writes to finish.
