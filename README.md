@@ -4,33 +4,72 @@ Per-user Markdown memory plugin for Hermes agent. Zero infrastructure dependency
 
 ## What It Does
 
-Adds per-user memory isolation to Hermes. Each user gets their own `{user_id}.md` (≤ 200 lines). MMD loads it before each reply and updates it at session end using one LLM call.
+Adds per-user persistent memory to Hermes. Each user gets their own `{user_id}.md` (≤ 200 lines). MMD:
+
+- Loads memory before every reply (injected as context)
+- Extracts and updates memory at session end using one LLM call
+- Auto-flushes after 30 minutes of idle (no session end needed)
+- Compacts the file when it exceeds 200 lines, archiving removed content to `{user_id}_log.md`
+
+## Architecture
+
+```
+MemoryStore           — filesystem I/O
+MemoryClassifier      — LLM-based ADD/UPDATE/DELETE/NOOP classification
+MemoryCompactor       — LLM-based file compaction
+IdleFlushScheduler    — background thread, fires after 30min idle
+MMDProvider           — Hermes MemoryProvider orchestrator
+```
+
+## Storage
+
+```
+$MMD_DATA_DIR/users/
+├── {user_id}.md        ← active memory, ≤ 200 lines
+└── {user_id}_log.md    ← archived content removed during compaction
+```
+
+`$MMD_DATA_DIR` defaults to `~/.hermes/mmd`.
 
 ## Install
 
 ```bash
-# Link or copy the plugin into Hermes' memory plugin directory
-ln -s "$(pwd)/plugin" ~/.hermes/plugins/memory/mmd
+# Link the plugin into Hermes' plugin directory
+ln -s "$(pwd)/plugin" ~/.hermes/plugins/mmd
 
-# Set the data directory (defaults to ~/.hermes/mmd if not set)
-export MMD_DATA_DIR=~/.hermes/mmd
+# Enable the plugin in config.yaml
+# memory:
+#   provider: mmd
 
-# Enable the plugin
-hermes memory setup mmd
+# Restart Hermes
+hermes gateway restart
 ```
 
-## Usage (bot side)
+## Slash Command
 
-```python
-# Before each conversation, bind the user
-memory_provider.initialize(session_id, user_id=f"telegram_{message.from_user.id}")
-```
+`/mmd` — flush the current session buffer, show what changed, and display current memory.
+
+## What Gets Remembered
+
+The classifier is prompted to extract 7 categories:
+
+1. Personal details (name, birthday, location, relationships)
+2. Important dates & events (converted to absolute dates)
+3. Preferences (likes/dislikes, habits, communication style)
+4. Plans & intentions
+5. Ongoing projects
+6. Professional context
+7. Health & lifestyle
+
+Skipped: phatic filler, session-only instructions, vague characterisations.
 
 ## Run Tests
 
 ```bash
 python3 -m pytest tests/ -v
 ```
+
+71 tests covering MemoryStore, MemoryClassifier, MemoryCompactor, IdleFlushScheduler, MMDProvider, and the `/mmd` command.
 
 ## Docs
 
