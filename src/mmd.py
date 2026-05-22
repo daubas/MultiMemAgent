@@ -338,29 +338,47 @@ class MMDProvider(_MemoryProviderBase):
 _active_provider: "MMDProvider | None" = None
 
 
+def _diff_memory(before: str, after: str) -> str:
+    """Return a +/- diff of two memory strings, line by line."""
+    before_lines = before.splitlines()
+    after_lines = after.splitlines()
+    before_set = set(before_lines)
+    after_set = set(after_lines)
+    removed = [f"- {l}" for l in before_lines if l.strip() and l not in after_set]
+    added = [f"+ {l}" for l in after_lines if l.strip() and l not in before_set]
+    return "\n".join(removed + added)
+
+
 def _mmd_command(raw_args: str) -> str:
-    """Handler for /mmd slash command."""
+    """Handler for /mmd slash command: flush buffer then show memory and diff."""
     provider = _active_provider
     if provider is None:
         return "(mmd: not initialized)"
 
-    sub = (raw_args or "").strip().lower()
+    if (raw_args or "").strip():
+        return "/mmd — flush buffer and display current memory"
+
     session_id = provider._current_session_id
     user_id = provider._sessions.get(session_id) if session_id else None
+    if not user_id:
+        return "(mmd: no active session)"
 
-    if sub in ("show", ""):
-        if not user_id:
-            return "(mmd: no active session)"
-        content = provider._store.read_memory(user_id)
-        return content if content.strip() else "(mmd: memory is empty)"
+    before = provider._store.read_memory(user_id)
 
-    if sub == "flush":
-        if not session_id or not provider._buffers.get(session_id):
-            return "(mmd: nothing to flush)"
+    flushed = bool(session_id and provider._buffers.get(session_id))
+    if flushed:
         provider._extract_and_persist(session_id)
-        return "(mmd: flushed)"
 
-    return "/mmd [show|flush]\n  show  — display current memory\n  flush — extract and save buffer now"
+    after = provider._store.read_memory(user_id)
+
+    parts = []
+    if flushed:
+        diff = _diff_memory(before, after)
+        parts.append("**變更：**\n" + diff if diff else "**變更：** (無新變更)")
+
+    parts.append("**目前記憶：**\n" + after.strip() if after.strip() else "**目前記憶：** (空)")
+
+    return "\n\n".join(parts)
 
 
 def register(ctx: Any) -> None:
@@ -381,6 +399,6 @@ def register(ctx: Any) -> None:
         ctx.register_command(
             "mmd",
             _mmd_command,
-            description="MMD memory: show current memory or flush buffer now",
-            args_hint="[show|flush]",
+            description="MMD memory: flush buffer and show current memory with diff",
+            args_hint="",
         )

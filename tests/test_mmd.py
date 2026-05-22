@@ -425,53 +425,52 @@ class TestMmdCommand:
     def teardown_method(self):
         self.mmd_module._active_provider = None
 
-    def test_show_returns_memory_contents(self):
+    def test_shows_memory_contents(self):
         from src.mmd import _mmd_command
         self.provider.initialize("sess_1", user_id="telegram_123")
         self.store.read_memory.return_value = "- fact A\n- fact B"
-        result = _mmd_command("show")
+        result = _mmd_command("")
         assert "fact A" in result
 
-    def test_show_empty_memory(self):
+    def test_shows_empty_memory(self):
         from src.mmd import _mmd_command
         self.provider.initialize("sess_1", user_id="telegram_123")
         self.store.read_memory.return_value = ""
-        result = _mmd_command("show")
-        assert "empty" in result.lower()
+        result = _mmd_command("")
+        assert "空" in result or "empty" in result.lower()
 
-    def test_no_args_same_as_show(self):
+    def test_no_active_session(self):
         from src.mmd import _mmd_command
-        self.provider.initialize("sess_1", user_id="telegram_123")
-        self.store.read_memory.return_value = "- fact"
-        assert _mmd_command("") == _mmd_command("show")
-
-    def test_show_no_active_session(self):
-        from src.mmd import _mmd_command
-        result = _mmd_command("show")
+        result = _mmd_command("")
         assert "session" in result.lower()
 
-    def test_flush_triggers_extract(self):
+    def test_flushes_buffer_and_shows_diff(self):
         from src.mmd import _mmd_command
         self.provider.initialize("sess_1", user_id="telegram_123")
         self.provider.sync_turn("hello", "hi", session_id="sess_1")
+        # read_memory called 3 times: before-flush, inside _extract_and_persist, after-flush
+        self.store.read_memory.side_effect = ["- old fact", "- old fact", "- old fact\n- new fact"]
         self.classifier.classify.return_value = [{"op": "ADD", "content": "new fact"}]
-        result = _mmd_command("flush")
-        assert "flushed" in result.lower()
+        result = _mmd_command("")
+        assert "new fact" in result
+        assert "+" in result
         self.classifier.classify.assert_called_once()
 
-    def test_flush_empty_buffer(self):
+    def test_no_diff_when_buffer_empty(self):
         from src.mmd import _mmd_command
         self.provider.initialize("sess_1", user_id="telegram_123")
-        result = _mmd_command("flush")
-        assert "nothing" in result.lower()
+        self.store.read_memory.return_value = "- existing fact"
+        result = _mmd_command("")
+        assert "變更" not in result
+        assert "existing fact" in result
 
-    def test_unknown_subcommand_shows_help(self):
+    def test_unknown_args_shows_help(self):
         from src.mmd import _mmd_command
         result = _mmd_command("unknown")
-        assert "show" in result and "flush" in result
+        assert "/mmd" in result
 
     def test_no_provider_returns_not_initialized(self):
         from src.mmd import _mmd_command
         self.mmd_module._active_provider = None
-        result = _mmd_command("show")
+        result = _mmd_command("")
         assert "not initialized" in result.lower()
