@@ -2,15 +2,19 @@
 TDD tests for src/mmd.py — MMD v1 per-user memory plugin.
 
 Structure mirrors the SOLID class decomposition:
-  TestMemoryStore       — file I/O, no mocks
-  TestMemoryClassifier  — LLM classification, ctx mocked
-  TestMemoryCompactor   — LLM compaction, ctx mocked
-  TestMMDProvider       — orchestration, all dependencies mocked
+  TestMemoryStore           — file I/O, no mocks
+  TestMemoryClassifier      — LLM classification, ctx mocked
+  TestMemoryCompactor       — LLM compaction, ctx mocked
+  TestIdleFlushScheduler    — idle timer, injectable clock
+  TestMMDProvider           — orchestration, all dependencies mocked
+  TestMMDProviderIdleWiring — verify provider wires scheduler correctly
 """
 
 import tempfile
+import threading
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -400,6 +404,123 @@ class TestMMDProvider:
     def test_handle_unknown_tool_returns_message(self):
         result = self.provider.handle_tool_call("unknown_tool", {})
         assert "unknown" in result.lower()
+
+
+# ---------------------------------------------------------------------------
+# IdleFlushScheduler — injectable clock, no real sleeping
+# ---------------------------------------------------------------------------
+
+class TestIdleFlushScheduler:
+    def setup_method(self):
+        from src.mmd import IdleFlushScheduler
+        self.callback = Mock()
+        self.now = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        self.scheduler = IdleFlushScheduler(
+            flush_callback=self.callback,
+            idle_seconds=1800,
+            _clock=lambda: self.now,
+        )
+
+    def _advance(self, seconds: int) -> None:
+        self.now = self.now + timedelta(seconds=seconds)
+
+    def test_touch_tracks_session(self):
+        self.scheduler.touch("sess_1")
+        assert "sess_1" in self.scheduler._last_activity
+
+    def test_check_idle_fires_callback_when_past_threshold(self):
+        self.scheduler.touch("sess_1")
+        self._advance(1801)
+        self.scheduler._check_idle_sessions()
+        self.callback.assert_called_once_with("sess_1")
+
+    def test_check_idle_skips_session_below_threshold(self):
+        self.scheduler.touch("sess_1")
+        self._advance(1799)
+        self.scheduler._check_idle_sessions()
+        self.callback.assert_not_called()
+
+    def test_check_idle_removes_session_after_firing(self):
+        self.scheduler.touch("sess_1")
+        self._advance(1801)
+        self.scheduler._check_idle_sessions()
+        assert "sess_1" not in self.scheduler._last_activity
+
+    def test_callback_exception_does_not_affect_other_sessions(self):
+        self.callback.side_effect = [Exception("boom"), None]
+        self.scheduler.touch("sess_1")
+        self.scheduler.touch("sess_2")
+        self._advance(1801)
+        self.scheduler._check_idle_sessions()
+        assert self.callback.call_count == 2
+
+    def test_remove_prevents_idle_callback(self):
+        self.scheduler.touch("sess_1")
+        self.scheduler.remove("sess_1")
+        self._advance(1801)
+        self.scheduler._check_idle_sessions()
+        self.callback.assert_not_called()
+
+    def test_start_is_idempotent(self):
+        self.scheduler.start()
+        thread_before = self.scheduler._thread
+        self.scheduler.start()
+        assert self.scheduler._thread is thread_before
+        self.scheduler.stop()
+
+    def test_stop_terminates_thread(self):
+        self.scheduler.start()
+        assert self.scheduler._thread.is_alive()
+        self.scheduler.stop()
+        assert not self.scheduler._thread.is_alive()
+
+    def test_multiple_sessions_only_idle_ones_flushed(self):
+        self.scheduler.touch("idle_sess")
+        self._advance(100)
+        self.scheduler.touch("active_sess")
+        self._advance(1701)  # idle_sess = 1801s, active_sess = 1701s
+        self.scheduler._check_idle_sessions()
+        self.callback.assert_called_once_with("idle_sess")
+
+
+# ---------------------------------------------------------------------------
+# MMDProvider — idle scheduler wiring
+# ---------------------------------------------------------------------------
+
+class TestMMDProviderIdleWiring:
+    def setup_method(self):
+        from src.mmd import MMDProvider
+        self.store = Mock()
+        self.classifier = Mock()
+        self.compactor = Mock()
+        self.scheduler = Mock()
+        self.store.is_available.return_value = True
+        self.store.read_memory.return_value = ""
+        self.classifier.classify.return_value = []
+        self.provider = MMDProvider(
+            self.store, self.classifier, self.compactor,
+            idle_scheduler=self.scheduler,
+        )
+
+    def test_initialize_starts_scheduler_and_touches(self):
+        self.provider.initialize("sess_1", user_id="telegram_123")
+        self.scheduler.start.assert_called_once()
+        self.scheduler.touch.assert_called_with("sess_1")
+
+    def test_sync_turn_touches_scheduler(self):
+        self.provider.initialize("sess_1", user_id="telegram_123")
+        self.scheduler.reset_mock()
+        self.provider.sync_turn("hello", "hi", session_id="sess_1")
+        self.scheduler.touch.assert_called_with("sess_1")
+
+    def test_on_session_end_removes_from_scheduler(self):
+        self.provider.initialize("sess_1", user_id="telegram_123")
+        self.provider.on_session_end([])
+        self.scheduler.remove.assert_called_with("sess_1")
+
+    def test_shutdown_stops_scheduler(self):
+        self.provider.shutdown()
+        self.scheduler.stop.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

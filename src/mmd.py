@@ -2,19 +2,21 @@
 MultiMemD (MMD) — Hermes Memory Provider Plugin, v1.
 
 SOLID structure:
-  MemoryStore       — filesystem I/O (Single Responsibility)
-  MemoryClassifier  — LLM-based op classification (Single Responsibility)
-  MemoryCompactor   — LLM-based file compaction (Single Responsibility)
-  MMDProvider       — Hermes MemoryProvider orchestrator (depends on abstractions)
-  register(ctx)     — Hermes plugin entry point
+  MemoryStore           — filesystem I/O (Single Responsibility)
+  MemoryClassifier      — LLM-based op classification (Single Responsibility)
+  MemoryCompactor       — LLM-based file compaction (Single Responsibility)
+  IdleFlushScheduler    — idle-timeout detection (Single Responsibility)
+  MMDProvider           — Hermes MemoryProvider orchestrator (depends on abstractions)
+  register(ctx)         — Hermes plugin entry point
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+import threading
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +212,79 @@ class MemoryCompactor:
 
 
 # ---------------------------------------------------------------------------
+# IdleFlushScheduler — Single Responsibility: idle-timeout detection
+# ---------------------------------------------------------------------------
+
+class IdleFlushScheduler:
+    """Fires flush_callback(session_id) after a session has been idle for idle_seconds.
+
+    A single background thread polls all tracked sessions every poll_seconds.
+    Depends only on a Callable — no knowledge of LLM, files, or MMDProvider.
+    """
+
+    def __init__(
+        self,
+        flush_callback: Callable[[str], None],
+        idle_seconds: int = 1800,
+        poll_seconds: int = 60,
+        _clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._flush_callback = flush_callback
+        self._idle_seconds = idle_seconds
+        self._poll_seconds = poll_seconds
+        self._clock = _clock or (lambda: datetime.now(tz=timezone.utc))
+        self._last_activity: dict[str, datetime] = {}
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+
+    def touch(self, session_id: str) -> None:
+        """Record activity for session_id. Call on initialize and every sync_turn."""
+        with self._lock:
+            self._last_activity[session_id] = self._clock()
+
+    def remove(self, session_id: str) -> None:
+        """Stop tracking session_id (call on session end to avoid double-flush)."""
+        with self._lock:
+            self._last_activity.pop(session_id, None)
+
+    def start(self) -> None:
+        """Start the background polling thread (idempotent)."""
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run, daemon=True, name="mmd-idle-flush"
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        """Stop the background thread and wait for it to exit."""
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=5)
+
+    def _run(self) -> None:
+        while not self._stop_event.wait(self._poll_seconds):
+            self._check_idle_sessions()
+
+    def _check_idle_sessions(self) -> None:
+        now = self._clock()
+        with self._lock:
+            idle = [
+                sid for sid, last in self._last_activity.items()
+                if (now - last).total_seconds() >= self._idle_seconds
+            ]
+        for sid in idle:
+            try:
+                self._flush_callback(sid)
+            except Exception:
+                logger.warning("IdleFlushScheduler: flush failed for %s", sid, exc_info=True)
+            with self._lock:
+                self._last_activity.pop(sid, None)
+
+
+# ---------------------------------------------------------------------------
 # Pure helper — no class needed, no side effects
 # ---------------------------------------------------------------------------
 
@@ -236,8 +311,9 @@ def _apply_ops(content: str, ops: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# MMDProvider — orchestrates the three components above
-# Depends on abstractions (MemoryStore, MemoryClassifier, MemoryCompactor)
+# MMDProvider — orchestrates the four components above
+# Depends on abstractions (MemoryStore, MemoryClassifier, MemoryCompactor,
+# IdleFlushScheduler)
 # ---------------------------------------------------------------------------
 
 class MMDProvider(_MemoryProviderBase):
@@ -254,10 +330,14 @@ class MMDProvider(_MemoryProviderBase):
         store: MemoryStore,
         classifier: MemoryClassifier,
         compactor: MemoryCompactor,
+        idle_scheduler: IdleFlushScheduler | None = None,
     ) -> None:
         self._store = store
         self._classifier = classifier
         self._compactor = compactor
+        self._idle_scheduler = idle_scheduler or IdleFlushScheduler(
+            flush_callback=self._extract_and_persist
+        )
         # session_id → user_id; cleared on session end
         self._sessions: dict[str, str] = {}
         # session_id → list of (user_content, assistant_content) turns
@@ -278,6 +358,8 @@ class MMDProvider(_MemoryProviderBase):
         self._buffers[session_id] = []
         self._current_session_id = session_id
         self._store.ensure_dirs()
+        self._idle_scheduler.start()
+        self._idle_scheduler.touch(session_id)
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         sid = session_id or self._current_session_id
@@ -290,11 +372,13 @@ class MMDProvider(_MemoryProviderBase):
         sid = session_id or self._current_session_id
         if sid in self._buffers:
             self._buffers[sid].append((user_content, assistant_content))
+        self._idle_scheduler.touch(sid)
 
     def on_session_end(self, messages: list[dict]) -> None:
         session_id = self._current_session_id
         if not session_id or session_id not in self._buffers:
             return
+        self._idle_scheduler.remove(session_id)
         if self._buffers[session_id]:
             self._extract_and_persist(session_id)
         self._sessions.pop(session_id, None)
@@ -315,7 +399,7 @@ class MMDProvider(_MemoryProviderBase):
         return f"(unknown tool: {tool_name})"
 
     def shutdown(self) -> None:
-        pass  # v1: all ops synchronous, nothing to drain
+        self._idle_scheduler.stop()
 
     # ------------------------------------------------------------------
     # Internal
