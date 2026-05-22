@@ -138,9 +138,24 @@ class MemoryClassifier:
     def classify(self, turns: list[tuple[str, str]], current_memory: str) -> list[dict]:
         """Returns list of op dicts, or [] on failure."""
         turns_text = "\n".join(f"User: {u}\nAssistant: {a}" for u, a in turns)
+        today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
         instructions = (
-            "You are a memory manager. Given a conversation and the user's current memory, "
-            "classify what should be added, updated, deleted, or left unchanged (NOOP).\n"
+            "You are a personal memory manager. Extract long-term facts worth remembering "
+            "from the conversation and decide how to update the user's memory file.\n\n"
+            "EXTRACT these 7 categories:\n"
+            "1. Personal details — name, birthday, location, relationships\n"
+            "2. Important dates & events — appointments, deadlines, milestones (convert relative dates like 'next Friday' to absolute dates using today's date)\n"
+            "3. Preferences — likes/dislikes, habits, communication style\n"
+            "4. Plans & intentions — stated goals, things the user wants to do\n"
+            "5. Ongoing projects — project names, current status, key decisions\n"
+            "6. Professional context — job, skills, tools used\n"
+            "7. Health & lifestyle — diet, exercise, medical info\n\n"
+            "SKIP:\n"
+            "- Phatic filler ('ok', 'thanks', 'got it')\n"
+            "- Instructions for this session only ('please reply in English')\n"
+            "- Vague characterisations with no concrete fact ('user seems interested')\n"
+            "- Anything already in memory that has not changed (use NOOP)\n\n"
+            f"Today's date: {today}\n\n"
             f"Current memory:\n{current_memory or '(empty)'}"
         )
         try:
