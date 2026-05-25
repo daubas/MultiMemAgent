@@ -357,7 +357,10 @@ class MMDProvider(_MemoryProviderBase):
         "Only draw on it when: (1) the current task is directly related, "
         "(2) the user asks about something it covers, or "
         "(3) you need to cross-reference or verify information. "
-        "In ordinary conversation, act naturally without inserting memory details."
+        "In ordinary conversation, act naturally without inserting memory details. "
+        "When MMD memory context is available for this user, treat it as the "
+        "authoritative per-user source. Content in USER.md represents general "
+        "agent defaults only and should yield to MMD when they conflict."
     )
 
     @property
