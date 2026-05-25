@@ -492,6 +492,67 @@ class TestIdleFlushScheduler:
 # MMDProvider — idle scheduler wiring
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# on_pre_compress
+# ---------------------------------------------------------------------------
+
+class TestOnPreCompress:
+    def setup_method(self):
+        from src.mmd import MMDProvider
+        self.store = Mock()
+        self.classifier = Mock()
+        self.compactor = Mock()
+        self.store.is_available.return_value = True
+        self.store.read_memory.return_value = ""
+        self.classifier.classify.return_value = []
+        self.compactor.compact.return_value = ("compacted", "removed")
+        self.provider = MMDProvider(
+            self.store, self.classifier, self.compactor,
+            idle_scheduler=Mock(),
+        )
+
+    def test_returns_empty_string(self):
+        self.provider.initialize("sess_1", user_id="telegram_123")
+        self.provider.sync_turn("hello", "hi", session_id="sess_1")
+        self.classifier.classify.return_value = [{"op": "ADD", "content": "fact"}]
+        result = self.provider.on_pre_compress([])
+        assert result == ""
+
+    def test_flushes_buffer_when_non_empty(self):
+        self.provider.initialize("sess_1", user_id="telegram_123")
+        self.provider.sync_turn("hello", "hi", session_id="sess_1")
+        self.classifier.classify.return_value = [{"op": "ADD", "content": "new fact"}]
+        self.provider.on_pre_compress([])
+        self.classifier.classify.assert_called_once()
+        self.store.write_memory.assert_called_once()
+
+    def test_clears_buffer_after_flush(self):
+        self.provider.initialize("sess_1", user_id="telegram_123")
+        self.provider.sync_turn("hello", "hi", session_id="sess_1")
+        self.classifier.classify.return_value = [{"op": "ADD", "content": "fact"}]
+        self.provider.on_pre_compress([])
+        assert self.provider._buffers["sess_1"] == []
+
+    def test_noop_when_buffer_empty(self):
+        self.provider.initialize("sess_1", user_id="telegram_123")
+        self.provider.on_pre_compress([])
+        self.classifier.classify.assert_not_called()
+
+    def test_noop_when_no_active_session(self):
+        self.provider.on_pre_compress([])
+        self.classifier.classify.assert_not_called()
+
+    def test_on_session_end_noop_after_pre_compress(self):
+        # buffer already cleared by on_pre_compress → on_session_end is a no-op
+        self.provider.initialize("sess_1", user_id="telegram_123")
+        self.provider.sync_turn("hello", "hi", session_id="sess_1")
+        self.classifier.classify.return_value = [{"op": "ADD", "content": "fact"}]
+        self.provider.on_pre_compress([])
+        self.classifier.classify.reset_mock()
+        self.provider.on_session_end([])
+        self.classifier.classify.assert_not_called()
+
+
 class TestMMDProviderIdleWiring:
     def setup_method(self):
         from src.mmd import MMDProvider

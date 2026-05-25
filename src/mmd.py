@@ -416,6 +416,14 @@ class MMDProvider(_MemoryProviderBase):
             return log if log else "(deep memory is empty)"
         return f"(unknown tool: {tool_name})"
 
+    def on_pre_compress(self, messages: list[dict]) -> str:
+        session_id = self._current_session_id
+        if not session_id or session_id not in self._buffers:
+            return ""
+        if self._buffers[session_id]:
+            self._extract_and_persist(session_id)
+        return ""
+
     def shutdown(self) -> None:
         self._idle_scheduler.stop()
 
