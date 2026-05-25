@@ -157,6 +157,9 @@ class MemoryClassifier:
             "- Instructions for this session only ('please reply in English')\n"
             "- Vague characterisations with no concrete fact ('user seems interested')\n"
             "- Anything already in memory that has not changed (use NOOP)\n\n"
+            "CLEANUP (review existing memory regardless of new conversation):\n"
+            "- DELETE one-time past events (appointments, meetings, deadlines) whose date has already passed\n"
+            "- DELETE entries that are now outdated because a newer entry supersedes them\n\n"
             f"Today's date: {today}\n\n"
             f"Current memory:\n{current_memory or '(empty)'}"
         )
