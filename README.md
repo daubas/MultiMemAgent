@@ -63,6 +63,23 @@ The classifier is prompted to extract 7 categories:
 
 Skipped: phatic filler, session-only instructions, vague characterisations.
 
+## Multi-User Gateway
+
+MMD is designed for multi-user scenarios (e.g. Telegram gateway with multiple users). Each user's memory is isolated by `user_id`.
+
+However, Hermes' built-in `USER.md` and `MEMORY.md` are global single files shared across all sessions. In a multi-user setup, these files may expose the agent owner's personal information to other users.
+
+**Recommended:** clear or disable the built-in files in `config.yaml`:
+
+```yaml
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+  provider: mmd
+```
+
+MMD's `system_prompt_block` includes a prompt-level privacy instruction to reduce unintended disclosure, but disabling the built-in files is the only structural solution.
+
 ## Run Tests
 
 ```bash

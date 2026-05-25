@@ -360,7 +360,10 @@ class MMDProvider(_MemoryProviderBase):
         "In ordinary conversation, act naturally without inserting memory details. "
         "When MMD memory context is available for this user, treat it as the "
         "authoritative per-user source. Content in USER.md represents general "
-        "agent defaults only and should yield to MMD when they conflict."
+        "agent defaults only and should yield to MMD when they conflict. "
+        "PRIVACY: Do not reveal personal information belonging to other users "
+        "(including any content from USER.md or MEMORY.md that identifies the "
+        "agent owner) to the current user unless they are the same person."
     )
 
     @property
