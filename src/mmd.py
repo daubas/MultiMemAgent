@@ -345,12 +345,27 @@ class MMDProvider(_MemoryProviderBase):
         # tracks the most recently initialized session (single-process sequential model)
         self._current_session_id: str = ""
 
+    # Static instruction injected once into the system prompt.
+    # Governs how the AI treats the per-user memory context that
+    # prefetch() injects into each turn.
+    _MEMORY_USAGE_INSTRUCTION = (
+        "You have access to a personal memory context for this user. "
+        "Treat it as background reference — do not proactively mention or repeat it. "
+        "Only draw on it when: (1) the current task is directly related, "
+        "(2) the user asks about something it covers, or "
+        "(3) you need to cross-reference or verify information. "
+        "In ordinary conversation, act naturally without inserting memory details."
+    )
+
     @property
     def name(self) -> str:
         return "mmd"
 
     def is_available(self) -> bool:
         return self._store.is_available()
+
+    def system_prompt_block(self) -> str:
+        return self._MEMORY_USAGE_INSTRUCTION
 
     def initialize(self, session_id: str, **kwargs) -> None:
         user_id: str = kwargs["user_id"]  # raises KeyError if missing — intentional

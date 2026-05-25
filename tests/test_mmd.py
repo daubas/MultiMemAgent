@@ -223,6 +223,11 @@ class TestMMDProvider:
         self.store.is_available.return_value = False
         assert self.provider.is_available() is False
 
+    def test_system_prompt_block_instructs_background_reference(self):
+        block = self.provider.system_prompt_block()
+        assert "background" in block.lower()
+        assert "proactively" in block.lower()
+
     # --- initialize ---
 
     def test_initialize_calls_ensure_dirs(self):
