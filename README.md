@@ -1,75 +1,96 @@
 # MultiMemD (MMD)
 
-Per-user Markdown memory plugin for Hermes agent. Zero infrastructure dependency.
+Local-first personal memory for Hermes agents, designed for multi-user bots.
 
-## What It Does
+MMD stores each user's long-term memory as small Markdown files, updates them
+with structured LLM extraction, and supports cross-channel identity pairing
+without requiring a vector database, external memory API, or cloud service.
 
-Adds per-user persistent memory to Hermes. Each user gets their own `{user_id}.md` (≤ 200 lines). MMD:
+## What It Is
 
-- Loads memory before every reply (injected as context)
-- Extracts and updates memory at session end using one LLM call
-- Auto-flushes after 30 minutes of idle (no session end needed)
-- Compacts the file when it exceeds 200 lines, archiving removed content to `{user_id}_log.md`
+MMD is a Hermes `MemoryProvider` plugin. It gives Telegram, Discord, and other
+gateway users isolated persistent memory while keeping storage inspectable and
+portable.
+
+Use it when you want:
+
+- per-user memory isolation for multi-user bot deployments
+- local Markdown storage instead of mem0, Qdrant, Chroma, or embeddings
+- low operational overhead with no separate infrastructure
+- optional pairing between multiple channel accounts owned by the same person
+
+## How It Works
+
+For each session, MMD:
+
+1. Resolves the channel user to a canonical memory ID.
+2. Loads that user's active memory before replies.
+3. Buffers conversation turns in memory.
+4. Flushes the buffer at session end, before compression, or after 30 minutes idle.
+5. Asks the configured Hermes LLM to classify memory changes as
+   `ADD`, `UPDATE`, `DELETE`, or `NOOP`.
+6. Applies the changes to the user's Markdown memory file.
+7. Compacts files over 200 lines and archives removed content to deep memory.
 
 ## Architecture
 
 ```
-MemoryStore           — filesystem I/O
-MemoryClassifier      — LLM-based ADD/UPDATE/DELETE/NOOP classification
-MemoryCompactor       — LLM-based file compaction
-IdleFlushScheduler    — background thread, fires after 30min idle
-MMDProvider           — Hermes MemoryProvider orchestrator
+MemoryStore           — filesystem I/O for active and archived memory
+MemoryClassifier      — LLM-based ADD / UPDATE / DELETE / NOOP extraction
+MemoryCompactor       — LLM-based reduction when memory exceeds 200 lines
+IdleFlushScheduler    — background idle flush after 30 minutes
+PairingManager        — cross-channel identity pairing with short-lived codes
+MMDProvider           — Hermes MemoryProvider orchestration
 ```
 
 ## Storage
 
+`$MMD_DATA_DIR` defaults to `~/.hermes/mmd`.
+
 ```
-$MMD_DATA_DIR/users/
-├── {user_id}.md        ← active memory, ≤ 200 lines
-└── {user_id}_log.md    ← archived content removed during compaction
+$MMD_DATA_DIR/
+├── identity.json
+├── identity.lock
+├── _pairing/
+│   └── {CODE}.json
+└── users/
+    ├── {canonical_uuid}.md
+    └── {canonical_uuid}_log.md
 ```
 
-`$MMD_DATA_DIR` defaults to `~/.hermes/mmd`.
+Active memory is loaded automatically. Log files contain archived deep memory
+from compaction and are only loaded on demand through the `load_deep_memory`
+tool.
 
 ## Install
 
 ```bash
-# Link the plugin into Hermes' plugin directory
 ln -s "$(pwd)/plugin" ~/.hermes/plugins/mmd
+```
 
-# Enable the plugin in config.yaml
-# memory:
-#   provider: mmd
+Enable the provider in Hermes config:
 
-# Restart Hermes
+```yaml
+memory:
+  provider: mmd
+```
+
+Then restart Hermes:
+
+```bash
 hermes gateway restart
 ```
 
-## Slash Command
+## Commands
 
-`/mmd` — flush the current session buffer, show what changed, and display current memory.
+- `/mmd` flushes the current buffer, shows what changed, and displays active memory.
+- `/pair` creates a short-lived pairing code for the current account.
+- `/pair <CODE>` confirms a code from another account and merges memory files.
 
-## What Gets Remembered
+## Privacy Notes
 
-The classifier is prompted to extract 7 categories:
-
-1. Personal details (name, birthday, location, relationships)
-2. Important dates & events (converted to absolute dates)
-3. Preferences (likes/dislikes, habits, communication style)
-4. Plans & intentions
-5. Ongoing projects
-6. Professional context
-7. Health & lifestyle
-
-Skipped: phatic filler, session-only instructions, vague characterisations.
-
-## Multi-User Gateway
-
-MMD is designed for multi-user scenarios (e.g. Telegram gateway with multiple users). Each user's memory is isolated by `user_id`.
-
-However, Hermes' built-in `USER.md` and `MEMORY.md` are global single files shared across all sessions. In a multi-user setup, these files may expose the agent owner's personal information to other users.
-
-**Recommended:** clear or disable the built-in files in `config.yaml`:
+MMD memory is isolated by canonical user ID. In multi-user gateways, disable
+Hermes' global built-in memory files to avoid leaking owner-specific context:
 
 ```yaml
 memory:
@@ -78,7 +99,8 @@ memory:
   provider: mmd
 ```
 
-MMD's `system_prompt_block` includes a prompt-level privacy instruction to reduce unintended disclosure, but disabling the built-in files is the only structural solution.
+MMD also injects a prompt-level privacy instruction, but disabling shared global
+files is the structural fix.
 
 ## Run Tests
 
@@ -86,7 +108,8 @@ MMD's `system_prompt_block` includes a prompt-level privacy instruction to reduc
 python3 -m pytest tests/ -v
 ```
 
-71 tests covering MemoryStore, MemoryClassifier, MemoryCompactor, IdleFlushScheduler, MMDProvider, and the `/mmd` command.
+Tests cover file storage, LLM classification fallbacks, compaction, idle flush,
+provider lifecycle, `/mmd`, cross-channel pairing, and `/pair`.
 
 ## Docs
 

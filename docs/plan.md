@@ -1,63 +1,71 @@
 # MultiMemD (MMD) — Project Plan
 
-## What Is MMD
+## Current Definition
 
-MMD is mem0's core ideas, stripped down to zero infrastructure dependency:
+MMD is a local-first personal memory provider for Hermes, designed for
+multi-user bot deployments.
 
-| mem0 | MMD |
-|---|---|
-| Per-user isolation | ✅ |
-| ADD / UPDATE / DELETE / NOOP extraction | ✅ |
-| Async update after conversation | ✅ |
-| Vector database (Qdrant / Chroma) | ❌ not needed |
-| Embedding model | ❌ not needed |
-| Cloud API dependency | ❌ not needed |
-| Graph memory | ❌ not needed |
-
-**Storage:** plain `.md` files. **Retrieval:** LLM reads the whole file — no search needed when memory is small.
+It keeps each user's long-term memory in small Markdown files, updates those
+files through structured LLM extraction, and avoids any dependency on a vector
+database, embedding model, or external memory service.
 
 ## Positioning
 
-> mem0 for Hermes, targeting lightweight bot scenarios, zero infrastructure dependency.
+> Local-first per-user memory for Hermes bots.
 
-For Hermes users, the official mem0 plugin requires an API key, a vector database, and a monthly fee. MMD requires nothing — it works out of the box.
+MMD is inspired by mem0's useful core loop: read existing memory, classify
+changes, then write updated memory. It intentionally removes the infrastructure
+that is unnecessary for small per-user memories.
 
-## The Honest Boundary
-
-mem0 uses vector search because memory can grow too large for the LLM to read in full. MMD's design assumes:
-
-```
-Each user's .md stays around ~200 lines
-→ fits in LLM context
-→ no vector search needed
-```
-
-This assumption holds for typical Telegram / Discord bot usage. If a user's memory grows to thousands of lines, the options are:
-1. Truncation (compress and summarise, keeping the file ≤ 200 lines)
-2. Upgrade to the official mem0 plugin
-
-MMD handles option 1. Option 2 is the natural exit path if the use case outgrows MMD.
-
-## Scope
-
-### v1 — Current Focus
-
-**Per-user private memory.**
-
-Each user has their own `{user_id}.md`. Before each reply, MMD loads it into Hermes context. After the session, MMD updates it using one `ctx.llm.complete_structured()` call to classify what changed — reusing whatever model the user has configured in Hermes.
-
-### Roadmap
-
-- **Wiki candidate buffering** — surface worthy content from conversations into the shared llm-wiki
-- **Cross-channel identity pairing** — merge a user's Telegram and Discord accounts into one memory (`src/pairing.py` is already written)
-
-## What We're Building
-
-| File | Status |
+| Capability | MMD |
 |---|---|
-| `src/pairing.py` | Done (roadmap feature, usable when needed) |
-| `src/mmd.py` | To build — v1 focus |
+| Per-user isolation | Yes |
+| ADD / UPDATE / DELETE / NOOP extraction | Yes |
+| Session-end and idle flushing | Yes |
+| Cross-channel identity pairing | Yes |
+| Active memory stored as Markdown | Yes |
+| Vector database / embeddings | No |
+| External memory API | No |
+| Graph memory | No |
 
-## Goal
+## Product Boundary
 
-Get `src/mmd.py` working with a Telegram bot. Validate that per-user memory isolation works end-to-end with Hermes.
+MMD assumes a user's active memory can stay around 200 lines. At that size, the
+whole file can be loaded into context and query-time vector search is not
+needed.
+
+When active memory grows too large, MMD compacts it back under the limit and
+archives removed content to `{canonical_uuid}_log.md`. Archived content remains
+available through the `load_deep_memory` tool.
+
+If a deployment needs thousands of searchable facts per user, MMD is no longer
+the right storage model; use a dedicated memory system with retrieval.
+
+## Implemented Scope
+
+- Hermes `MemoryProvider` implementation in `src/mmd.py`
+- per-user Markdown storage under `$MMD_DATA_DIR/users/`
+- structured LLM classification into `ADD`, `UPDATE`, `DELETE`, `NOOP`
+- compaction and archived deep memory logs
+- idle flush scheduler for sessions that never explicitly end
+- pre-compression flush hook
+- `/mmd` command for manual flush and inspection
+- `load_deep_memory` tool schema and handler
+- UUID-based cross-channel identity pairing in `src/pairing.py`
+- `/pair` command for initiating and confirming account pairing
+- pytest coverage for provider, storage, compaction, idle flush, and pairing
+
+## Near-Term Work
+
+1. Validate plugin behavior inside a real Hermes gateway with Telegram user IDs.
+2. Confirm whether `plugin/plugin.yaml` should declare additional hooks used by
+   the current provider lifecycle.
+3. Update ADR-0009 where implementation has moved beyond the original v1 spec.
+4. Decide whether wiki candidate buffering belongs in this repo or a separate
+   plugin.
+
+## Success Criteria
+
+MMD is successful when a multi-user Hermes bot can run with only local file
+storage, preserve each user's memory independently, pair accounts on request,
+and avoid exposing memory between users.
