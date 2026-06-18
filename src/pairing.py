@@ -9,6 +9,7 @@ Storage layout (relative to data_dir):
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import secrets
@@ -71,10 +72,12 @@ class PairingManager:
     def __init__(self, data_dir: str) -> None:
         self._root = Path(data_dir)
         self._pairing_dir = self._root / "_pairing"
+        self._attempts_dir = self._pairing_dir / "_attempts"
         self._identity_path = self._root / "identity.json"
         self._lock_path = self._root / "identity.lock"
 
         self._pairing_dir.mkdir(parents=True, exist_ok=True)
+        self._attempts_dir.mkdir(parents=True, exist_ok=True)
         self._root.mkdir(parents=True, exist_ok=True)
 
         # Remove orphaned .tmp files left by a crashed atomic write.
@@ -129,13 +132,20 @@ class PairingManager:
             AlreadyPaired   — confirmer_id is already in the same group as initiator.
         """
         code = code.upper()
-        payload = self._load_pairing(code)  # raises CodeNotFound
+        self._assert_confirmer_allowed(confirmer_id)
+        try:
+            payload = self._load_pairing(code)  # raises CodeNotFound
+        except CodeNotFound:
+            self._record_failed_attempt(confirmer_id)
+            raise
 
         if confirmer_id == payload["initiator_id"]:
+            self._record_failed_attempt(confirmer_id)
             raise PairingError("Cannot confirm your own pairing request")
 
         if _is_expired(payload["expires_at"]):
             self._delete_pairing(code)
+            self._record_failed_attempt(confirmer_id)
             raise CodeExpired(f"Code {code} expired at {payload['expires_at']}")
 
         if payload["attempts"] >= _MAX_ATTEMPTS:
@@ -162,6 +172,7 @@ class PairingManager:
             # Same group → already paired
             if (initiator_canonical and old_confirmer_canonical
                     and initiator_canonical == old_confirmer_canonical):
+                self._record_failed_attempt(confirmer_id)
                 raise AlreadyPaired(
                     f"{confirmer_id} is already paired with {initiator_id}"
                 )
@@ -179,6 +190,7 @@ class PairingManager:
             lock_fd.close()
 
         self._delete_pairing(code)
+        self._clear_failed_attempts(confirmer_id)
 
         # The confirmer's old UUID memory file (if any) must be merged by the caller.
         users_dir = self._root / "users"
@@ -187,6 +199,9 @@ class PairingManager:
             old_file = users_dir / f"{old_confirmer_canonical}.md"
             if old_file.exists():
                 memory_files_to_merge.append(str(old_file))
+            old_log = users_dir / f"{old_confirmer_canonical}_log.md"
+            if old_log.exists():
+                memory_files_to_merge.append(str(old_log))
 
         return canonical_name, merged_ids, memory_files_to_merge
 
@@ -261,6 +276,10 @@ class PairingManager:
     def _pairing_path(self, code: str) -> Path:
         return self._pairing_dir / f"{code}.json"
 
+    def _attempts_path(self, confirmer_id: str) -> Path:
+        digest = hashlib.sha256(confirmer_id.encode("utf-8")).hexdigest()
+        return self._attempts_dir / f"{digest}.json"
+
     def _write_pairing(self, code: str, payload: dict) -> None:
         self._pairing_path(code).write_text(
             json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -285,6 +304,40 @@ class PairingManager:
             return json.loads(self._identity_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             return {}
+
+    def _assert_confirmer_allowed(self, confirmer_id: str) -> None:
+        path = self._attempts_path(confirmer_id)
+        if not path.exists():
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            path.unlink(missing_ok=True)
+            return
+        if _is_expired(data.get("expires_at", "")):
+            path.unlink(missing_ok=True)
+            return
+        if data.get("attempts", 0) >= _MAX_ATTEMPTS:
+            raise TooManyAttempts(
+                f"{confirmer_id} exceeded {_MAX_ATTEMPTS} failed pairing attempts"
+            )
+
+    def _record_failed_attempt(self, confirmer_id: str) -> None:
+        path = self._attempts_path(confirmer_id)
+        data = {"attempts": 0, "expires_at": _utcnow_plus(_TTL_SECONDS)}
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+                if not _is_expired(existing.get("expires_at", "")):
+                    data = existing
+            except (json.JSONDecodeError, OSError):
+                pass
+        data["attempts"] = int(data.get("attempts", 0)) + 1
+        data.setdefault("expires_at", _utcnow_plus(_TTL_SECONDS))
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def _clear_failed_attempts(self, confirmer_id: str) -> None:
+        self._attempts_path(confirmer_id).unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------

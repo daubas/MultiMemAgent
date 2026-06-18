@@ -97,10 +97,17 @@ class MemoryStore:
     def ensure_dirs(self) -> None:
         self._users_dir.mkdir(parents=True, exist_ok=True)
 
+    def _safe_user_id(self, user_id: str) -> str:
+        if "/" in user_id or "\\" in user_id or user_id in {"", ".", ".."}:
+            raise ValueError(f"Invalid MMD user_id: {user_id!r}")
+        return user_id
+
     def _memory_path(self, user_id: str) -> Path:
+        user_id = self._safe_user_id(user_id)
         return self._users_dir / f"{user_id}.md"
 
     def _log_path(self, user_id: str) -> Path:
+        user_id = self._safe_user_id(user_id)
         return self._users_dir / f"{user_id}_log.md"
 
     def read_memory(self, user_id: str) -> str:
@@ -140,6 +147,7 @@ class MemoryClassifier:
 
     def __init__(self, llm: Any = None) -> None:
         self._llm = llm  # injected in tests; None → lazy PluginLlm in production
+        self.last_failed = False
 
     def _get_llm(self) -> Any:
         if self._llm is None:
@@ -149,6 +157,7 @@ class MemoryClassifier:
 
     def classify(self, turns: list[tuple[str, str]], current_memory: str) -> list[dict]:
         """Returns list of op dicts, or [] on failure."""
+        self.last_failed = False
         turns_text = "\n".join(f"User: {u}\nAssistant: {a}" for u, a in turns)
         today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
         instructions = (
@@ -180,9 +189,11 @@ class MemoryClassifier:
                 json_schema=CLASSIFICATION_SCHEMA,
             )
             if not result or not result.parsed:
+                self.last_failed = True
                 return []
             return result.parsed.get("private", [])
         except Exception:
+            self.last_failed = True
             logger.warning("MemoryClassifier: LLM call failed", exc_info=True)
             return []
 
@@ -313,10 +324,19 @@ def _apply_ops(content: str, ops: list[dict]) -> str:
             lines.append(f"- {text}\n")
         elif op == "UPDATE":
             old = item.get("old", "")
-            lines = [
-                f"- {text}\n" if line.rstrip("\n") == f"- {old}" else line
-                for line in lines
-            ]
+            matched = False
+            updated_lines = []
+            for line in lines:
+                if line.rstrip("\n") == f"- {old}":
+                    updated_lines.append(f"- {text}\n")
+                    matched = True
+                else:
+                    updated_lines.append(line)
+            lines = updated_lines
+            if not matched:
+                if lines and not lines[-1].endswith("\n"):
+                    lines[-1] += "\n"
+                lines.append(f"- {text}\n")
         elif op == "DELETE":
             lines = [l for l in lines if l.rstrip("\n") != f"- {text}"]
         # NOOP: skip
@@ -361,6 +381,7 @@ class MMDProvider(_MemoryProviderBase):
         self._buffers: dict[str, list[tuple[str, str]]] = {}
         # tracks the most recently initialized session (single-process sequential model)
         self._current_session_id: str = ""
+        self._lock = threading.RLock()
 
     # Static instruction injected once into the system prompt.
     # Governs how the AI treats the per-user memory context that
@@ -393,46 +414,60 @@ class MMDProvider(_MemoryProviderBase):
     def initialize(self, session_id: str, **kwargs) -> None:
         user_id: str = kwargs["user_id"]  # raises KeyError if missing — intentional
         uuid_key = self._pairing.resolve(user_id) if self._pairing else user_id
-        self._sessions[session_id] = uuid_key
-        self._user_ids[session_id] = user_id
-        self._buffers[session_id] = []
-        self._current_session_id = session_id
+        with self._lock:
+            self._sessions[session_id] = uuid_key
+            self._user_ids[session_id] = user_id
+            self._buffers[session_id] = []
+            self._current_session_id = session_id
         self._store.ensure_dirs()
         self._idle_scheduler.start()
         self._idle_scheduler.touch(session_id)
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
-        sid = session_id or self._current_session_id
-        user_id = self._sessions.get(sid)
+        with self._lock:
+            sid = session_id or self._current_session_id
+            user_id = self._sessions.get(sid)
         if not user_id:
             return ""
         return self._store.read_memory(user_id)
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "") -> None:
-        sid = session_id or self._current_session_id
-        if sid in self._buffers:
+        with self._lock:
+            sid = session_id or self._current_session_id
+            if sid not in self._buffers:
+                return
             self._buffers[sid].append((user_content, assistant_content))
         self._idle_scheduler.touch(sid)
 
     def on_session_end(self, messages: list[dict]) -> None:
-        session_id = self._current_session_id
-        if not session_id or session_id not in self._buffers:
-            return
-        self._idle_scheduler.remove(session_id)
-        if self._buffers[session_id]:
-            self._extract_and_persist(session_id)
-        self._sessions.pop(session_id, None)
-        self._user_ids.pop(session_id, None)
-        self._buffers.pop(session_id, None)
-        self._current_session_id = ""
+        with self._lock:
+            session_id = self._current_session_id
+            if not session_id or session_id not in self._buffers:
+                return
+        with self._lock:
+            has_buffer = bool(self._buffers.get(session_id))
+        if has_buffer:
+            self._idle_scheduler.remove(session_id)
+            if not self._extract_and_persist(session_id):
+                self._idle_scheduler.touch(session_id)
+                return
+        else:
+            self._idle_scheduler.remove(session_id)
+        with self._lock:
+            self._sessions.pop(session_id, None)
+            self._user_ids.pop(session_id, None)
+            self._buffers.pop(session_id, None)
+            if self._current_session_id == session_id:
+                self._current_session_id = ""
 
     def get_tool_schemas(self) -> list[dict]:
         return [LOAD_DEEP_MEMORY_SCHEMA]
 
     def handle_tool_call(self, tool_name: str, args: dict, **kwargs) -> str:
         if tool_name == "load_deep_memory":
-            session_id = kwargs.get("session_id", self._current_session_id)
-            user_id = self._sessions.get(session_id)
+            with self._lock:
+                session_id = kwargs.get("session_id", self._current_session_id)
+                user_id = self._sessions.get(session_id)
             if not user_id:
                 return "(no deep memory available)"
             log = self._store.read_log(user_id)
@@ -440,10 +475,12 @@ class MMDProvider(_MemoryProviderBase):
         return f"(unknown tool: {tool_name})"
 
     def on_pre_compress(self, messages: list[dict]) -> str:
-        session_id = self._current_session_id
-        if not session_id or session_id not in self._buffers:
-            return ""
-        if self._buffers[session_id]:
+        with self._lock:
+            session_id = self._current_session_id
+            if not session_id or session_id not in self._buffers:
+                return ""
+            has_buffer = bool(self._buffers[session_id])
+        if has_buffer:
             self._extract_and_persist(session_id)
         return ""
 
@@ -455,18 +492,24 @@ class MMDProvider(_MemoryProviderBase):
     # ------------------------------------------------------------------
 
     def _merge_memory_files(self, canonical_uuid: str, files_to_merge: list[str]) -> None:
-        """Append content from old UUID memory files into canonical_uuid.md, then delete them."""
+        """Merge old UUID memory files into the canonical memory and log files."""
         if not files_to_merge:
             return
         base = self._store.read_memory(canonical_uuid)
         extra: list[str] = []
+        log_extra: list[str] = []
         for path_str in files_to_merge:
             p = Path(path_str)
             if p.exists():
                 content = p.read_text(encoding="utf-8").strip()
                 if content:
-                    extra.append(content)
+                    if p.name.endswith("_log.md"):
+                        log_extra.append(content)
+                    else:
+                        extra.append(content)
                 p.unlink(missing_ok=True)
+        if log_extra:
+            self._store.append_log(canonical_uuid, "\n".join(log_extra))
         if not extra:
             return
         merged = base.rstrip("\n") + "\n" + "\n".join(extra) + "\n"
@@ -478,17 +521,26 @@ class MMDProvider(_MemoryProviderBase):
         else:
             self._store.write_memory(canonical_uuid, merged)
 
-    def _extract_and_persist(self, session_id: str) -> None:
-        user_id = self._sessions[session_id]
-        turns = self._buffers[session_id]
+    def _extract_and_persist(self, session_id: str) -> bool:
+        with self._lock:
+            user_id = self._sessions.get(session_id)
+            turns = self._buffers.get(session_id, [])
+            if not user_id or not turns:
+                return True
+            turns = list(turns)
+            self._buffers[session_id] = []
         current = self._store.read_memory(user_id)
 
         ops = self._classifier.classify(turns, current)
-        self._buffers[session_id] = []
+        if getattr(self._classifier, "last_failed", False) is True:
+            with self._lock:
+                if session_id in self._buffers:
+                    self._buffers[session_id] = turns + self._buffers[session_id]
+            return False
 
         has_changes = any(item.get("op") != "NOOP" for item in ops)
         if not has_changes:
-            return
+            return True
 
         updated = _apply_ops(current, ops)
 
@@ -499,6 +551,7 @@ class MMDProvider(_MemoryProviderBase):
                 self._store.append_log(user_id, summary)
         else:
             self._store.write_memory(user_id, updated)
+        return True
 
 
 # ---------------------------------------------------------------------------

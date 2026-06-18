@@ -181,6 +181,20 @@ class TestPairingManagerConfirm:
         assert len(files) == 1
         assert files[0] == str(mem_file)
 
+    def test_returns_log_file_to_merge_when_confirmer_has_deep_memory(self):
+        mgr, tmp = _make_manager()
+        uuid_a = mgr.resolve("user_A")
+        uuid_b = mgr.resolve("user_B")
+        log_file = Path(tmp) / "users" / f"{uuid_b}_log.md"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        log_file.write_text("archived user_B memory\n")
+
+        code = mgr.create_request("user_A")
+        canonical, _, files = mgr.confirm("user_B", code)
+
+        assert canonical == uuid_a
+        assert str(log_file) in files
+
     def test_no_memory_file_when_confirmer_has_no_file(self):
         mgr, _ = _make_manager()
         code = mgr.create_request("user_A")
@@ -197,6 +211,26 @@ class TestPairingManagerConfirm:
         mgr, _ = _make_manager()
         with pytest.raises(CodeNotFound):
             mgr.confirm("user_B", "XXXXXX")
+
+    def test_repeated_invalid_codes_lock_confirmer(self):
+        mgr, _ = _make_manager()
+        for _ in range(3):
+            with pytest.raises(CodeNotFound):
+                mgr.confirm("user_B", "XXXXXX")
+        with pytest.raises(TooManyAttempts):
+            mgr.confirm("user_B", "XXXXXX")
+
+    def test_successful_confirm_clears_failed_attempts(self):
+        mgr, _ = _make_manager()
+        with pytest.raises(CodeNotFound):
+            mgr.confirm("user_B", "XXXXXX")
+
+        code = mgr.create_request("user_A")
+        mgr.confirm("user_B", code)
+
+        code2 = mgr.create_request("user_C")
+        canonical, merged_ids, _ = mgr.confirm("user_B", code2)
+        assert "user_B" in merged_ids
 
     def test_expired_code_raises(self):
         mgr, tmp = _make_manager()

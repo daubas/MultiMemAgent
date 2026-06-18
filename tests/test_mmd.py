@@ -81,6 +81,11 @@ class TestMemoryStore:
         (Path(self.tmp) / "users" / "telegram_123.md").write_text("line1\nline2\nline3", encoding="utf-8")
         assert self.store.line_count("telegram_123") == 3
 
+    def test_rejects_path_like_user_id(self):
+        self.store.ensure_dirs()
+        with pytest.raises(ValueError):
+            self.store.write_memory("../outside", "content")
+
 
 # ---------------------------------------------------------------------------
 # MemoryClassifier
@@ -175,6 +180,14 @@ class TestApplyOps:
         result = self.apply("# Memory\n- 舊事實\n", [{"op": "UPDATE", "old": "舊事實", "content": "新事實"}])
         assert "新事實" in result
         assert "舊事實" not in result
+
+    def test_update_adds_new_line_when_old_not_found(self):
+        result = self.apply(
+            "# Memory\n- unrelated fact\n",
+            [{"op": "UPDATE", "old": "missing fact", "content": "new fact"}],
+        )
+        assert "unrelated fact" in result
+        assert "new fact" in result
 
     def test_noop_leaves_content_unchanged(self):
         original = "# Memory\n- fact\n"
@@ -328,6 +341,38 @@ class TestMMDProvider:
         self.classifier.classify.return_value = []
         self.provider.on_session_end([])  # should not raise
 
+    def test_extract_llm_failure_preserves_buffer(self):
+        self.provider.initialize("sess_1", user_id="telegram_123")
+        self.provider.sync_turn("hello", "hi", session_id="sess_1")
+        self.classifier.classify.return_value = []
+        self.classifier.last_failed = True
+        self.provider.on_pre_compress([])
+        assert self.provider._buffers["sess_1"] == [("hello", "hi")]
+
+    def test_on_session_end_keeps_session_when_extract_fails(self):
+        self.provider.initialize("sess_1", user_id="telegram_123")
+        self.provider.sync_turn("hello", "hi", session_id="sess_1")
+        self.classifier.classify.return_value = []
+        self.classifier.last_failed = True
+        self.provider.on_session_end([])
+        assert self.provider._buffers["sess_1"] == [("hello", "hi")]
+        assert self.provider._sessions["sess_1"] == "telegram_123"
+
+    def test_turn_added_during_flush_is_not_dropped(self):
+        self.provider.initialize("sess_1", user_id="telegram_123")
+        self.provider.sync_turn("first", "reply", session_id="sess_1")
+
+        def classify(turns, current):
+            self.provider.sync_turn("second", "reply", session_id="sess_1")
+            return [{"op": "ADD", "content": "first fact"}]
+
+        self.classifier.classify.side_effect = classify
+        self.provider.on_pre_compress([])
+
+        assert self.provider._buffers["sess_1"] == [("second", "reply")]
+        written = self.store.write_memory.call_args[0][1]
+        assert "first fact" in written
+
     def test_buffer_cleared_after_extract(self):
         self.provider.initialize("sess_1", user_id="telegram_123")
         self.provider.sync_turn("hello", "hi", session_id="sess_1")
@@ -386,6 +431,16 @@ class TestMMDProvider:
         self.compactor.compact.return_value = ("compacted", "")
         self.provider.on_session_end([])
         self.store.append_log.assert_not_called()
+
+    def test_merge_memory_files_appends_old_log_to_canonical_log(self):
+        old_log = Path(tempfile.mkdtemp()) / "old_uuid_log.md"
+        old_log.write_text("old archived memory", encoding="utf-8")
+
+        self.store.read_memory.return_value = ""
+        self.provider._merge_memory_files("canonical_uuid", [str(old_log)])
+
+        self.store.append_log.assert_called_with("canonical_uuid", "old archived memory")
+        assert not old_log.exists()
 
     # --- tools ---
 
