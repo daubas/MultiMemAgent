@@ -1,7 +1,7 @@
 """
-MultiMemD (MMD) — Hermes Memory Provider Plugin, v1.
+MultiMemD (MMD) — local-first Hermes Memory Provider plugin.
 
-SOLID structure:
+Runtime structure:
   MemoryStore           — filesystem I/O (Single Responsibility)
   MemoryClassifier      — LLM-based op classification (Single Responsibility)
   MemoryCompactor       — LLM-based file compaction (Single Responsibility)

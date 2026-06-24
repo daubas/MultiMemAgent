@@ -1,4 +1,4 @@
-# MMD Roadmap
+# MMD Future Work
 
 This file tracks work that is not part of the current stable core.
 
@@ -28,12 +28,9 @@ there is a clear reason to split into an optional extension.
 
 ## Documentation Cleanup
 
-- Refresh ADR-0009 so it describes the current implementation, not only the
-  original v1 design.
-- Document the expected storage files:
-  `identity.json`, `identity.lock`, `_pairing/*.json`, `users/*.md`, and
-  `users/*_log.md`.
 - Add a short manual test script for local Hermes integration.
+- Keep archived design documents under `archive/` once current docs supersede
+  them.
 
 ## Optional Feature: Wiki Candidate Buffering
 

@@ -113,6 +113,7 @@ provider lifecycle, `/mmd`, cross-channel pairing, and `/pair`.
 
 ## Docs
 
-- [Project Plan](docs/plan.md)
-- [MMD Spec](docs/adr/0009-mmd-spec.md)
-- [Roadmap](docs/roadmap.md)
+- [Documentation Index](docs/README.md)
+- [Current Status](docs/status.md)
+- [Future Work](docs/future-work.md)
+- [Archived v1 Spec](archive/adr/0009-mmd-v1-spec.md)

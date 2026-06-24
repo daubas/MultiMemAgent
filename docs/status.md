@@ -1,4 +1,4 @@
-# MultiMemD (MMD) — Project Plan
+# MultiMemD (MMD) — Current Status
 
 ## Current Definition
 
@@ -48,11 +48,14 @@ the right storage model; use a dedicated memory system with retrieval.
 - structured LLM classification into `ADD`, `UPDATE`, `DELETE`, `NOOP`
 - compaction and archived deep memory logs
 - idle flush scheduler for sessions that never explicitly end
+- thread-safe buffer swap during flush, with retry when classification fails
 - pre-compression flush hook
 - `/mmd` command for manual flush and inspection
 - `load_deep_memory` tool schema and handler
 - UUID-based cross-channel identity pairing in `src/pairing.py`
 - `/pair` command for initiating and confirming account pairing
+- confirmer-based pairing failure limits
+- path validation for memory file user IDs
 - pytest coverage for provider, storage, compaction, idle flush, and pairing
 
 ## Near-Term Work
@@ -60,9 +63,10 @@ the right storage model; use a dedicated memory system with retrieval.
 1. Validate plugin behavior inside a real Hermes gateway with Telegram user IDs.
 2. Confirm whether `plugin/plugin.yaml` should declare additional hooks used by
    the current provider lifecycle.
-3. Update ADR-0009 where implementation has moved beyond the original v1 spec.
-4. Decide whether wiki candidate buffering belongs in this repo or a separate
+3. Decide whether wiki candidate buffering belongs in this repo or a separate
    plugin.
+4. Confirm what command context Hermes passes to slash command handlers, then
+   restrict `/mmd` and `/pair` to direct messages when possible.
 
 ## Success Criteria
 

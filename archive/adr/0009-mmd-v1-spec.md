@@ -1,8 +1,13 @@
 ---
 status: accepted
+archived: true
 ---
 
 # MMD v1 Spec — Per-User Memory
+
+> Archived design note. This file preserves the original v1 design and no
+> longer fully describes the current implementation. See `docs/status.md` and
+> `README.md` for the active project shape.
 
 ## Design Basis
 

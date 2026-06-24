@@ -7,8 +7,9 @@ for Hermes agents in multi-user bot deployments. Core implementation lives in
 `src/`: `mmd.py` handles Markdown memory storage, LLM extraction, compaction,
 idle flushing, and provider orchestration; `pairing.py` handles cross-channel
 identity pairing. Hermes plugin files live in `plugin/`, including
-`plugin.yaml`. Tests are in `tests/` and mirror the source modules. Design notes
-and roadmap material are in `docs/`, including ADRs under `docs/adr/`.
+`plugin.yaml`. Tests are in `tests/` and mirror the source modules. Current
+project state lives in `docs/status.md`; future work lives in
+`docs/future-work.md`; obsolete design notes are kept under `archive/`.
 
 ## Build, Test, and Development Commands
 
